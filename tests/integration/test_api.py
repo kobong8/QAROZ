@@ -52,3 +52,54 @@ def test_three_projects_remain_independent(tmp_path: Path):
         ]
         assert len(set(ids)) == 3
         assert len(client.get("/api/projects").json()) == 3
+
+
+def test_project_accepts_multiple_backend_and_health_urls(tmp_path: Path):
+    settings = Settings(
+        tmp_path, tmp_path / "d", tmp_path / "a", tmp_path / "d" / "db.sqlite"
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/api/projects",
+            json={
+                "name": "Services",
+                "frontend_url": "http://localhost:5173",
+                "backend_urls": [
+                    "http://localhost:8000/",
+                    "http://localhost:8001",
+                ],
+                "health_urls": [
+                    "http://localhost:8000/health",
+                    "http://localhost:8001/ready/",
+                ],
+            },
+        )
+
+        assert response.status_code == 201
+        project = response.json()
+        assert project["backend_urls"] == [
+            "http://localhost:8000",
+            "http://localhost:8001",
+        ]
+        assert project["health_urls"] == [
+            "http://localhost:8000/health",
+            "http://localhost:8001/ready",
+        ]
+        assert project["backend_url"] == "http://localhost:8000"
+
+
+def test_backend_urls_must_be_an_array(tmp_path: Path):
+    settings = Settings(
+        tmp_path, tmp_path / "d", tmp_path / "a", tmp_path / "d" / "db.sqlite"
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/api/projects",
+            json={
+                "name": "Invalid",
+                "frontend_url": "http://localhost:5173",
+                "backend_urls": "http://localhost:8000",
+            },
+        )
+        assert response.status_code == 422
+        assert "backend_urls must be an array" in response.json()["detail"]

@@ -45,14 +45,14 @@ psutil, Playwright, Chromium, ZAP 연결 상태를 확인할 수 있습니다.
 |---|---|
 | Name | MetaverseSandbox |
 | Frontend URL | `http://localhost:5173` |
-| Backend URL | `http://localhost:8000` |
-| Health URL | 없으면 **빈칸**. 존재하지 않는 `/health`를 넣지 않습니다. |
-| Expected ports | `5173, 8000` |
+| Backend URLs | 한 줄에 하나씩 입력. 예: `http://localhost:8000`, `http://localhost:8001` |
+| Health URLs | 각 백엔드와 같은 순서로 한 줄에 하나씩 입력. 없으면 **빈칸**. 존재하지 않는 `/health`를 넣지 않습니다. |
+| Expected ports | `5173, 8000, 8001` |
 | Process rules | 선택. 실제 프로세스가 맞을 때만 `node.exe, python.exe` |
 | Project path | 선택. 파일 업로드 시나리오를 쓸 때 실제 대상 소스 경로 입력 |
 
 먼저 **SYSTEM CHECK**를 실행하세요. 프런트엔드는 HTTP 정상 응답을 확인하고,
-Health URL이 없으면 백엔드 기본 URL도 확인합니다. 백엔드 `/`만 404인 경우에는
+각 Health URL을 확인하며, 해당 순서의 Health URL이 없으면 각 백엔드 기본 URL을 확인합니다. 백엔드 `/`만 404인 경우에는
 `WARNING`과 설정 안내를 표시합니다. 서버의 모든 API가 실패했다는 뜻은 아닙니다.
 명시적으로 지정한 Health URL이 404면 `FAIL`입니다.
 
@@ -75,6 +75,7 @@ Health URL이 없으면 백엔드 기본 URL도 확인합니다. 백엔드 `/`�
 **테스트 / 시나리오 관리**에서 실제 백엔드 테스트를 추가하세요.
 예시: 이름 `Backend health`, Method `GET`, URL `http://localhost:8000/api/health`,
 예상 상태 `200`, JSON 필드 기대값 `{"status":"ok"}`, Body `null`.
+백엔드가 여러 개라면 각 백엔드의 실제 API URL에 대한 테스트 케이스를 각각 추가하세요.
 이 예시 앱의 `/api/models`, `/api/maps`, `/api/characters`에도 GET 테스트를 추가할 수 있습니다.
 다른 앱에는 그 앱에서 실제 제공하는 URL과 기대값을 사용하세요.
 
