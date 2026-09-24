@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>QAROZ · Don't trust. Verify.</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header><div class="brand"><span class="mark">Q</span><div><strong>QAROZ</strong><small>QUALITY ASSURANCE ORCHESTRATION</small></div></div><div class="header-actions"><span id="clock"></span><button id="runAll" class="primary">▶ RUN ALL</button></div></header>
+  <nav id="tabs" aria-label="Projects"><button id="addTab" class="add">＋ ADD PROJECT</button></nav>
+  <main>
+    <section id="empty" class="empty"><div class="radar">◎</div><h1>Ready to verify.</h1><p>Register a local web service to begin deterministic quality checks.</p><button class="primary" data-add>＋ Add your first project</button></section>
+    <section id="dashboard" hidden>
+      <div class="project-heading"><div><p class="eyebrow">ACTIVE PROJECT</p><h1 id="projectName"></h1><a id="projectUrl" target="_blank" rel="noreferrer"></a></div><div id="overall" class="status neutral"><small>OVERALL STATUS</small><b>NOT RUN</b></div></div>
+      <div class="actions"><button data-run="system">◉ SYSTEM CHECK</button><button data-run="api">↯ API TESTS</button><button data-run="e2e">◇ E2E SCENARIOS</button><button data-run="security">⬡ SECURITY SCAN</button><button id="editProject">⚙ EDIT</button></div>
+      <div class="metrics"><article><span>SYSTEM</span><b id="systemMetric">—</b><small>Process · Port · Health</small></article><article><span>API</span><b id="apiMetric">—</b><small>Assertions & timing</small></article><article><span>PLAYWRIGHT</span><b id="e2eMetric">—</b><small>Browser scenarios</small></article><article><span>SECURITY</span><b id="securityMetric">—</b><small>ZAP alerts</small></article></div>
+      <div class="panel"><div class="panel-title"><div><p class="eyebrow">EVIDENCE LOG</p><h2>Run history</h2></div><button id="refresh">↻ Refresh</button></div><div id="runs" class="runs"><p class="muted">No runs recorded yet.</p></div></div>
+    </section>
+  </main>
+  <dialog id="projectDialog"><form id="projectForm"><div class="dialog-title"><div><p class="eyebrow">PROJECT REGISTRY</p><h2 id="formTitle">Add project</h2></div><button type="button" data-close>×</button></div><input type="hidden" name="id"><label>Name *<input name="name" required placeholder="Payments Portal"></label><label>Frontend URL *<input name="frontend_url" type="url" required placeholder="http://localhost:5173"></label><div class="split"><label>Backend URL<input name="backend_url" type="url" placeholder="http://localhost:8000"></label><label>Health URL<input name="health_url" type="url" placeholder="http://localhost:8000/health"></label></div><label>Project path<input name="project_path" placeholder="C:\code\my-project"></label><div class="split"><label>Expected ports<input name="expected_ports" placeholder="5173, 8000"></label><label>Process rules<input name="process_rules" placeholder="node.exe, python.exe"></label></div><label class="check"><input name="enabled" type="checkbox" checked> Enable automated checks</label><p id="formError" class="error"></p><footer><button type="button" id="deleteProject" class="danger" hidden>Delete</button><span></span><button type="button" data-close>Cancel</button><button class="primary" type="submit">Save project</button></footer></form></dialog>
+  <div id="toast" role="status"></div>
+  <script src="/js/app.js"></script>
+</body></html>
