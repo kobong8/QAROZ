@@ -16,7 +16,8 @@ PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS projects (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, frontend_url TEXT NOT NULL, backend_url TEXT,
  project_path TEXT, health_url TEXT, expected_ports TEXT NOT NULL DEFAULT '[]',
- process_rules TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
+ process_rules TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL,
+ backend_urls TEXT NOT NULL DEFAULT '[]', health_urls TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS api_test_cases (
  id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -55,6 +56,8 @@ CREATE INDEX IF NOT EXISTS idx_results_run ON test_results(run_id);
 JSON_FIELDS = {
     "expected_ports",
     "process_rules",
+    "backend_urls",
+    "health_urls",
     "headers",
     "query",
     "body",
@@ -80,6 +83,23 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
             connection.executescript(SCHEMA)
+            columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(projects)")
+            }
+            for column in ("backend_urls", "health_urls"):
+                if column not in columns:
+                    connection.execute(
+                        f"ALTER TABLE projects ADD COLUMN {column} TEXT NOT NULL DEFAULT '[]'"
+                    )
+            # Preserve projects created by releases that only supported one backend.
+            connection.execute(
+                "UPDATE projects SET backend_urls=json_array(backend_url) "
+                "WHERE backend_url IS NOT NULL AND backend_url != '' AND backend_urls='[]'"
+            )
+            connection.execute(
+                "UPDATE projects SET health_urls=json_array(health_url) "
+                "WHERE health_url IS NOT NULL AND health_url != '' AND health_urls='[]'"
+            )
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:

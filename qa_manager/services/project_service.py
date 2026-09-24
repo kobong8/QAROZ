@@ -28,9 +28,23 @@ class ProjectService:
         value["frontend_url"] = validate_http_url(
             str(value.get("frontend_url", ""))
         ).rstrip("/")
-        for key in ("backend_url", "health_url"):
-            if value.get(key):
-                value[key] = validate_http_url(str(value[key])).rstrip("/")
+        for plural, singular in (
+            ("backend_urls", "backend_url"),
+            ("health_urls", "health_url"),
+        ):
+            urls = value.get(plural)
+            if urls is None:
+                urls = [value[singular]] if value.get(singular) else []
+            if not isinstance(urls, list):
+                raise ValueError(f"{plural} must be an array of URLs")
+            normalized = []
+            for url in urls:
+                clean_url = validate_http_url(str(url)).rstrip("/")
+                if clean_url not in normalized:
+                    normalized.append(clean_url)
+            value[plural] = normalized
+            # Keep the old fields populated for API clients from earlier releases.
+            value[singular] = normalized[0] if normalized else None
         if value.get("project_path"):
             path = Path(value["project_path"]).expanduser().resolve()
             if not path.exists() or not path.is_dir():
@@ -65,17 +79,27 @@ class ProjectService:
             "name",
             "frontend_url",
             "backend_url",
+            "backend_urls",
             "project_path",
             "health_url",
+            "health_urls",
             "expected_ports",
             "process_rules",
             "enabled",
         }
-        value = self.validate(
-            {**current, **{k: v for k, v in payload.items() if k in allowed}}
-        )
+        changes = {k: v for k, v in payload.items() if k in allowed}
+        # A legacy client updating a singular field should still replace the list.
+        if "backend_url" in changes and "backend_urls" not in changes:
+            changes["backend_urls"] = (
+                [changes["backend_url"]] if changes["backend_url"] else []
+            )
+        if "health_url" in changes and "health_urls" not in changes:
+            changes["health_urls"] = (
+                [changes["health_url"]] if changes["health_url"] else []
+            )
+        value = self.validate({**current, **changes})
         encoded = dict(value)
-        for key in ("expected_ports", "process_rules"):
+        for key in ("expected_ports", "process_rules", "backend_urls", "health_urls"):
             encoded[key] = json.dumps(encoded[key])
         assignments = ",".join(f"{key}=?" for key in encoded)
         self.db.execute(

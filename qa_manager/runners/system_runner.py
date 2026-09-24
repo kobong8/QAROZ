@@ -16,9 +16,16 @@ class SystemRunner:
             results.append(self._process(rule))
         for port in project.get("expected_ports", []):
             host = "localhost"
-            for key in ("frontend_url", "backend_url", "health_url"):
-                if project.get(key):
-                    parsed = urlparse(project[key])
+            urls = [project.get("frontend_url")]
+            urls += project.get("backend_urls") or (
+                [project["backend_url"]] if project.get("backend_url") else []
+            )
+            urls += project.get("health_urls") or (
+                [project["health_url"]] if project.get("health_url") else []
+            )
+            for url in urls:
+                if url:
+                    parsed = urlparse(url)
                     if (parsed.port or (443 if parsed.scheme == "https" else 80)) == int(port):
                         host = parsed.hostname or host
                         break
@@ -27,16 +34,26 @@ class SystemRunner:
         # only require a successful backend HTTP response for an explicit health URL.
         frontend = project["frontend_url"]
         results.append(self._http(frontend))
-        health = project.get("health_url")
-        backend = project.get("backend_url")
-        if health and health != frontend:
-            results.append(self._http(health))
-        elif not health and backend and backend != frontend:
-            result = self._http(backend)
-            if result.message.startswith("HTTP 404 "):
+        backends = project.get("backend_urls") or (
+            [project["backend_url"]] if project.get("backend_url") else []
+        )
+        health_urls = project.get("health_urls") or (
+            [project["health_url"]] if project.get("health_url") else []
+        )
+        for index, backend in enumerate(backends):
+            health = health_urls[index] if index < len(health_urls) else None
+            target = health or backend
+            if target == frontend:
+                continue
+            result = self._http(target)
+            if not health and result.message.startswith("HTTP 404 "):
                 result.status = Status.WARNING
                 result.message += "; backend root has no route. Configure an existing health/API URL or verify API cases."
             results.append(result)
+        # Also support additional standalone health endpoints.
+        for health in health_urls[len(backends):]:
+            if health != frontend:
+                results.append(self._http(health))
         return results
 
     def _process(self, rule: str) -> RunnerResult:

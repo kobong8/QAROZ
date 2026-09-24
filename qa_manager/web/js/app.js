@@ -119,7 +119,7 @@ function openForm(edit = false) {
   $('#formError').textContent = ''; $('#deleteProject').hidden = !edit; $('#formTitle').textContent = edit ? 'Edit project' : 'Add project';
   if (edit && active) for (const [key, value] of Object.entries(active)) if (form.elements[key]) {
     if (key === 'enabled') form.elements[key].checked = value;
-    else form.elements[key].value = Array.isArray(value) ? value.join(', ') : (value ?? '');
+    else form.elements[key].value = Array.isArray(value) ? value.join(key.endsWith('_urls') ? '\n' : ', ') : (value ?? '');
   }
   $('#projectDialog').showModal();
 }
@@ -128,7 +128,8 @@ $('#projectForm').onsubmit = async event => {
   data.enabled = form.elements.enabled.checked;
   data.expected_ports = data.expected_ports.split(',').map(value => value.trim()).filter(Boolean).map(Number);
   data.process_rules = data.process_rules.split(',').map(value => value.trim()).filter(Boolean);
-  ['backend_url', 'health_url', 'project_path'].forEach(key => { if (!data[key]) data[key] = null; });
+  for (const key of ['backend_urls', 'health_urls']) data[key] = data[key].split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+  if (!data.project_path) data.project_path = null;
   try {
     const project = await api(data.id ? `/projects/${data.id}` : '/projects', {method: data.id ? 'PUT' : 'POST', body: JSON.stringify(data)});
     $('#projectDialog').close(); await loadProjects(project.id); toast('Project saved');
@@ -194,7 +195,7 @@ async function refreshTests() {
 $('#manageTests').onclick = async () => {
   if (!active) return;
   testsProjectId = active.id; $('#testsProject').textContent = active.name; $('#testsError').textContent = '';
-  $('#apiForm').elements.url.value = (active.backend_url || active.frontend_url) + '/'; $('#testsDialog').showModal();
+  $('#apiForm').elements.url.value = (active.backend_urls?.[0] || active.backend_url || active.frontend_url) + '/'; $('#testsDialog').showModal();
   try { await refreshTests(); } catch (error) { $('#testsError').textContent = error.message; }
 };
 for (const [formId, endpoint] of [['apiForm', 'api-tests'], ['scenarioForm', 'scenarios']]) {
