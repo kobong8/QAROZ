@@ -48,7 +48,8 @@ class RunService:
                 "current_stage": "Queued",
             },
         )
-        self.executor.submit(self._execute, run_id, project, suite, options or {})
+        run_options = {**(options or {}), "security_requested": suite == "security"}
+        self.executor.submit(self._execute, run_id, project, suite, run_options)
         return self.get(run_id)  # type: ignore[return-value]
 
     def _execute(
@@ -138,6 +139,11 @@ class RunService:
             row["key"]: row["value"]
             for row in self.db.fetchall("SELECT * FROM settings")
         }
+        if not options.get("security_requested") and settings.get("security_enabled", "false") != "true":
+            return [RunnerResult(
+                "security", "ZAP Scan", Status.SKIPPED,
+                message="Security is not enabled for Run All. Install/start ZAP, configure its API, then enable security in Settings.",
+            )]
         result, alerts = ZapRunner().run(
             project["frontend_url"],
             settings.get("zap_api_url", "http://127.0.0.1:8090"),

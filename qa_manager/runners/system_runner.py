@@ -15,13 +15,28 @@ class SystemRunner:
         for rule in project.get("process_rules", []):
             results.append(self._process(rule))
         for port in project.get("expected_ports", []):
-            results.append(self._port("127.0.0.1", int(port)))
-        target = (
-            project.get("health_url")
-            or project.get("backend_url")
-            or project["frontend_url"]
-        )
-        results.append(self._http(target))
+            host = "localhost"
+            for key in ("frontend_url", "backend_url", "health_url"):
+                if project.get(key):
+                    parsed = urlparse(project[key])
+                    if (parsed.port or (443 if parsed.scheme == "https" else 80)) == int(port):
+                        host = parsed.hostname or host
+                        break
+            results.append(self._port(host, int(port)))
+        # A backend may have no route at /. Always check the frontend, and
+        # only require a successful backend HTTP response for an explicit health URL.
+        frontend = project["frontend_url"]
+        results.append(self._http(frontend))
+        health = project.get("health_url")
+        backend = project.get("backend_url")
+        if health and health != frontend:
+            results.append(self._http(health))
+        elif not health and backend and backend != frontend:
+            result = self._http(backend)
+            if result.message.startswith("HTTP 404 "):
+                result.status = Status.WARNING
+                result.message += "; backend root has no route. Configure an existing health/API URL or verify API cases."
+            results.append(result)
         return results
 
     def _process(self, rule: str) -> RunnerResult:
@@ -88,7 +103,7 @@ class SystemRunner:
             )
         return RunnerResult(
             "system",
-            f"HTTP: {urlparse(url).netloc}",
+            f"HTTP: {url}",
             status,
             int((time.perf_counter() - started) * 1000),
             message,

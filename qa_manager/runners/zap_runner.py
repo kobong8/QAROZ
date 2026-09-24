@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 import urllib.parse
@@ -14,10 +15,7 @@ from qa_manager.core.models import RunnerResult, Status
 class ZapRunner:
     def status(self, api_url: str) -> dict[str, Any]:
         try:
-            with urllib.request.urlopen(
-                f"{api_url.rstrip('/')}/JSON/core/view/version/", timeout=2
-            ) as response:
-                data = json.load(response)
+            data = self._get(api_url, "/JSON/core/view/version/", timeout=2)
             return {"running": True, "version": data.get("version")}
         except Exception as exc:
             return {"running": False, "message": str(exc)}
@@ -83,6 +81,11 @@ class ZapRunner:
                     "scan"
                 ]
                 self._wait(api_url, "/JSON/ascan/view/status/", scan, timeout=300)
+            deadline = time.monotonic() + 120
+            while int(self._get(api_url, "/JSON/pscan/view/recordsToScan/")["recordsToScan"]) > 0:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("ZAP passive scan timed out")
+                time.sleep(1)
             raw = self._get(api_url, "/JSON/core/view/alerts/", {"baseurl": target})
             alerts = [
                 {
@@ -124,13 +127,20 @@ class ZapRunner:
 
     @staticmethod
     def _get(
-        api_url: str, path: str, params: dict[str, str] | None = None
+        api_url: str, path: str, params: dict[str, str] | None = None, *, timeout: int = 30
     ) -> dict[str, Any]:
         url = f"{api_url.rstrip('/')}{path}"
         if params:
             url += "?" + urllib.parse.urlencode(params)
-        with urllib.request.urlopen(url, timeout=30) as response:
-            return json.load(response)
+        headers = {}
+        if os.environ.get("QAROZ_ZAP_API_KEY"):
+            headers["X-ZAP-API-Key"] = os.environ["QAROZ_ZAP_API_KEY"]
+        request = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            data = json.load(response)
+        if "code" in data and "message" in data:
+            raise RuntimeError(f"ZAP API error: {data['code']}")
+        return data
 
     def _wait(self, api_url: str, path: str, scan_id: str, timeout: int = 120) -> None:
         deadline = time.monotonic() + timeout

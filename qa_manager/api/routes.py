@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import importlib.util
+import sys
 import uuid
 from pathlib import Path
 from typing import Any
@@ -80,6 +82,14 @@ def create_api_test(
         validate_http_url(payload["url"])
     except (KeyError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
+    if not isinstance(payload.get("assertions", {}), dict):
+        raise HTTPException(422, "assertions must be a JSON object")
+    try:
+        expected_status = int(payload.get("expected_status", 200))
+        if not 100 <= expected_status <= 599:
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise HTTPException(422, "expected_status must be between 100 and 599")
     data = {
         "id": str(uuid.uuid4()),
         "project_id": project_id,
@@ -89,7 +99,7 @@ def create_api_test(
         "headers": payload.get("headers", {}),
         "query": payload.get("query", {}),
         "body": payload.get("body"),
-        "expected_status": int(payload.get("expected_status", 200)),
+        "expected_status": expected_status,
         "assertions": payload.get("assertions", {}),
         "max_response_ms": payload.get("max_response_ms"),
         "enabled": bool(payload.get("enabled", True)),
@@ -119,8 +129,24 @@ def create_scenario(
     if not state(request).projects.get(project_id):
         raise HTTPException(404, "Project not found")
     permitted = {"goto", "click", "fill", "select", "upload", "wait"}
-    if any(step.get("action") not in permitted for step in payload.get("steps", [])):
+    steps, expected = payload.get("steps"), payload.get("expected")
+    if not isinstance(steps, list) or not steps or not isinstance(expected, list) or not expected:
+        raise HTTPException(422, "A scenario requires non-empty steps and expected arrays")
+    if any(not isinstance(step, dict) or step.get("action") not in permitted for step in steps):
         raise HTTPException(422, "Unsupported scenario action")
+    for step in steps:
+        required = "url" if step["action"] == "goto" else "selector"
+        if not isinstance(step.get(required), str) or not step[required].strip():
+            raise HTTPException(422, f"Scenario step requires {required}")
+        if step["action"] == "select" and "value" not in step:
+            raise HTTPException(422, "select requires value")
+        if step["action"] == "upload" and not step.get("path"):
+            raise HTTPException(422, "upload requires path")
+    for item in expected:
+        if not isinstance(item, dict) or item.get("type", "visible") not in {"visible", "text", "count"} or not item.get("selector"):
+            raise HTTPException(422, "Expected results require a selector and visible/text/count type")
+        if item.get("type") in {"text", "count"} and "value" not in item:
+            raise HTTPException(422, "text/count expectations require value")
     data = {
         "id": str(uuid.uuid4()),
         "project_id": project_id,
@@ -206,17 +232,25 @@ def settings(request: Request):
     }
     values.setdefault("zap_api_url", "http://127.0.0.1:8090")
     values.setdefault("allowed_active_hosts", "[]")
+    values.setdefault("security_enabled", "false")
     return values
 
 
 @router.put("/settings")
 def update_settings(request: Request, payload: dict[str, Any] = Body(...)):
-    allowed = {"zap_api_url", "zap_executable", "allowed_active_hosts"}
+    allowed = {"zap_api_url", "zap_executable", "allowed_active_hosts", "security_enabled"}
     for key, value in payload.items():
         if key not in allowed:
             continue
         if key == "zap_api_url":
-            validate_http_url(str(value), allow_remote=False)
+            try:
+                validate_http_url(str(value), allow_remote=False)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+        if key == "security_enabled":
+            if value not in (True, False, "true", "false"):
+                raise HTTPException(422, "security_enabled must be true or false")
+            value = "true" if value is True or value == "true" else "false"
         if key == "zap_executable" and value and not Path(value).expanduser().is_file():
             raise HTTPException(422, "ZAP executable does not exist")
         serialized = json.dumps(value) if isinstance(value, list) else str(value)
@@ -231,3 +265,23 @@ def update_settings(request: Request, payload: dict[str, Any] = Body(...)):
 def zap_status(request: Request):
     config = settings(request)
     return ZapRunner().status(config["zap_api_url"])
+
+
+@router.get("/system/readiness")
+def readiness(request: Request):
+    packages = {name: importlib.util.find_spec(name) is not None for name in ("psutil", "playwright")}
+    chromium = False
+    browser_message = "Playwright package is not installed"
+    if packages["playwright"]:
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as playwright:
+                chromium = Path(playwright.chromium.executable_path).is_file()
+            browser_message = "Chromium installed" if chromium else "Run: python -m playwright install chromium"
+        except Exception as exc:
+            browser_message = f"Playwright check failed: {type(exc).__name__}"
+    return {
+        "python": sys.executable, "packages": packages, "chromium": chromium,
+        "browser_message": browser_message, "zap": zap_status(request),
+        "security_enabled": settings(request)["security_enabled"] == "true",
+    }

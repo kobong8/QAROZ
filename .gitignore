@@ -5,3 +5,5 @@ __pycache__/
 data/
 artifacts/
 *.egg-info/
+# Chromium may write GPU diagnostics in the working directory on Windows.
+/debug.log

@@ -23,7 +23,7 @@ class PlaywrightRunner:
         network_errors: list[dict[str, Any]] = []
         artifacts: list[dict[str, Any]] = []
         try:
-            from playwright.sync_api import sync_playwright
+            from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
         except ImportError:
             return RunnerResult(
                 "e2e",
@@ -34,58 +34,48 @@ class PlaywrightRunner:
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=True)
-                context = browser.new_context()
-                context.tracing.start(screenshots=True, snapshots=True, sources=True)
-                page = context.new_page()
-                page.on(
-                    "console",
-                    lambda msg: (
-                        console_errors.append(msg.text) if msg.type == "error" else None
-                    ),
-                )
-                page.on(
-                    "response",
-                    lambda response: (
-                        network_errors.append(
-                            {"status": response.status, "url": response.url}
-                        )
-                        if response.status >= 400
-                        else None
-                    ),
-                )
-                for step in scenario.get("steps", []):
-                    self._step(page, step, base_url, project_path)
-                for expectation in scenario.get("expected", []):
-                    self._expect(page, expectation)
-                context.tracing.stop()
-                browser.close()
-            return RunnerResult(
-                "e2e",
-                scenario["name"],
-                Status.PASS,
-                int((time.perf_counter() - started) * 1000),
-                "Scenario completed",
-                {"console_errors": console_errors, "network_errors": network_errors},
-            )
-        except AssertionError as exc:
-            status, message = Status.FAIL, str(exc)
+                try:
+                    context = browser.new_context()
+                    context.tracing.start(screenshots=True, snapshots=True, sources=True)
+                    page = context.new_page()
+                    page.set_default_timeout(10000)
+                    page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+                    page.on("pageerror", lambda exc: console_errors.append(str(exc)))
+                    page.on("response", lambda response: network_errors.append(
+                        {"status": response.status, "url": response.url}
+                    ) if response.status >= 400 else None)
+                    try:
+                        for step in scenario.get("steps", []):
+                            self._step(page, step, base_url, project_path)
+                        for expectation in scenario.get("expected", []):
+                            self._expect(page, expectation)
+                        status = Status.WARNING if console_errors or network_errors else Status.PASS
+                        message = "Scenario completed" + ("; browser console/network errors were observed" if status == Status.WARNING else "")
+                    except (AssertionError, PlaywrightTimeoutError) as exc:
+                        status, message = Status.FAIL, str(exc)
+                    except Exception as exc:
+                        status, message = Status.ERROR, f"Browser execution failed: {type(exc).__name__}: {exc}"
+                    # Capture evidence while the browser and Playwright transport are alive.
+                    if status != Status.PASS:
+                        artifact_dir.mkdir(parents=True, exist_ok=True)
+                        for kind, path, capture in (
+                            ("screenshot", screenshot, lambda: page.screenshot(path=str(screenshot), full_page=True, timeout=5000)),
+                            ("trace", trace, lambda: context.tracing.stop(path=str(trace))),
+                        ):
+                            try:
+                                capture()
+                                artifacts.append({"type": kind, "local_path": str(path), "metadata": {}})
+                            except Exception as exc:
+                                message += f"; {kind} capture failed: {type(exc).__name__}"
+                    else:
+                        context.tracing.stop()
+                finally:
+                    browser.close()
         except Exception as exc:
             status, message = (
                 Status.ERROR,
                 f"Browser execution failed: {type(exc).__name__}: {exc}",
             )
-        try:
-            page.screenshot(path=str(screenshot), full_page=True)
-            artifacts.append(
-                {"type": "screenshot", "local_path": str(screenshot), "metadata": {}}
-            )
-            context.tracing.stop(path=str(trace))
-            artifacts.append(
-                {"type": "trace", "local_path": str(trace), "metadata": {}}
-            )
-            browser.close()
-        except Exception:
-            pass
         return RunnerResult(
             "e2e",
             scenario["name"],
@@ -112,7 +102,9 @@ class PlaywrightRunner:
                 destination = target
             else:
                 destination = base_url.rstrip("/") + "/" + target.lstrip("/")
-            page.goto(destination, wait_until="domcontentloaded")
+            response = page.goto(destination, wait_until="domcontentloaded")
+            if response and response.status >= 400:
+                raise AssertionError(f"Navigation returned HTTP {response.status}: {destination}")
         elif action == "click":
             page.locator(selector).click()
         elif action == "fill":
@@ -139,13 +131,15 @@ class PlaywrightRunner:
 
     @staticmethod
     def _expect(page: Any, expectation: dict[str, Any]) -> None:
+        from playwright.sync_api import expect
+
         locator = page.locator(expectation["selector"])
         kind = expectation.get("type", "visible")
-        if kind == "visible" and not locator.is_visible():
-            raise AssertionError(f"{expectation['selector']} is not visible")
-        if kind == "text" and expectation["value"] not in locator.inner_text():
-            raise AssertionError(
-                f"Expected text {expectation['value']!r} in {expectation['selector']}"
-            )
-        if kind == "count" and locator.count() != int(expectation["value"]):
-            raise AssertionError(f"Expected {expectation['value']} matching elements")
+        if kind == "visible":
+            expect(locator).to_be_visible()
+        elif kind == "text":
+            expect(locator).to_contain_text(expectation["value"])
+        elif kind == "count":
+            expect(locator).to_have_count(int(expectation["value"]))
+        else:
+            raise ValueError(f"Unsupported expectation: {kind}")
