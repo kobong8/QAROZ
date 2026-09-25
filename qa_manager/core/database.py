@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS test_runs (
 CREATE TABLE IF NOT EXISTS test_results (
  id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES test_runs(id) ON DELETE CASCADE,
  category TEXT NOT NULL, test_name TEXT NOT NULL, status TEXT NOT NULL, duration_ms INTEGER NOT NULL,
- message TEXT, details TEXT NOT NULL DEFAULT '{}'
+ message TEXT, details TEXT NOT NULL DEFAULT '{}', source_id TEXT
 );
 CREATE TABLE IF NOT EXISTS artifacts (
  id TEXT PRIMARY KEY, result_id TEXT NOT NULL REFERENCES test_results(id) ON DELETE CASCADE,
@@ -91,6 +91,11 @@ class Database:
                     connection.execute(
                         f"ALTER TABLE projects ADD COLUMN {column} TEXT NOT NULL DEFAULT '[]'"
                     )
+            result_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(test_results)")
+            }
+            if "source_id" not in result_columns:
+                connection.execute("ALTER TABLE test_results ADD COLUMN source_id TEXT")
             # Preserve projects created by releases that only supported one backend.
             connection.execute(
                 "UPDATE projects SET backend_urls=json_array(backend_url) "
