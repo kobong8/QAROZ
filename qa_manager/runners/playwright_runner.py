@@ -124,7 +124,7 @@ class PlaywrightRunner:
         elif action == "wait":
             page.locator(selector).wait_for(
                 state=step.get("state", "visible"),
-                timeout=int(step.get("timeout", 5000)),
+                timeout=int(step.get("timeout", 10000)),
             )
         else:
             raise ValueError(f"Unsupported scenario action: {action}")

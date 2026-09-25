@@ -228,3 +228,71 @@ $('#starter').onclick = async () => {
 };
 setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString(); }, 1000);
 loadProjects().catch(error => toast(error.message));
+
+// Scenario Recorder is an adapter: its draft is converted to the unchanged
+// {steps, expected} Scenario payload only when the user saves it.
+let recorderId = null, recorderTimer = null, recorderDraft = {steps: [], expected: []};
+function renderRecordedList(key) {
+  const box = $(key === 'steps' ? '#recordedSteps' : '#recordedExpected'); box.replaceChildren();
+  recorderDraft[key].forEach((item, index) => {
+    const row = node('div', null, 'recorded-item');
+    row.append(node('span', String(index + 1)), node('code', key === 'steps' ? item.action : item.type));
+    const value = node('input'); value.value = JSON.stringify(item); value.setAttribute('aria-label', `${key} ${index + 1} JSON`);
+    value.onchange = () => { try { recorderDraft[key][index] = JSON.parse(value.value); value.setCustomValidity(''); } catch (_) { value.setCustomValidity('유효한 JSON을 입력하세요.'); value.reportValidity(); } };
+    const up = node('button', '↑'), down = node('button', '↓'), remove = node('button', '삭제');
+    up.disabled = index === 0; down.disabled = index === recorderDraft[key].length - 1;
+    up.onclick = () => { [recorderDraft[key][index - 1], recorderDraft[key][index]] = [item, recorderDraft[key][index - 1]]; renderRecordedList(key); };
+    down.onclick = () => { [recorderDraft[key][index + 1], recorderDraft[key][index]] = [item, recorderDraft[key][index + 1]]; renderRecordedList(key); };
+    remove.onclick = () => { recorderDraft[key].splice(index, 1); renderRecordedList(key); };
+    row.append(value, up, down, remove); box.append(row);
+  });
+  if (!recorderDraft[key].length) box.append(node('p', '아직 기록이 없습니다.', 'muted'));
+}
+function renderRecording(recording) {
+  recorderDraft = {steps: recording.steps || [], expected: recording.expected || []};
+  $('#recorderStatus').textContent = `상태: ${recording.status}${recording.error ? ' · ' + recording.error : ''}`;
+  $('#saveRecording').disabled = recording.status !== 'stopped';
+  $('#stopRecorder').disabled = !['starting', 'recording'].includes(recording.status);
+  renderRecordedList('steps'); renderRecordedList('expected');
+}
+async function pollRecording() {
+  if (!recorderId) return;
+  try {
+    const recording = await api(`/recordings/${recorderId}`); renderRecording(recording);
+    if (['starting', 'recording'].includes(recording.status)) recorderTimer = setTimeout(pollRecording, 500);
+  } catch (error) { $('#recorderError').textContent = error.message; }
+}
+$('#startRecorder').onclick = async () => {
+  if (!testsProjectId) return;
+  clearTimeout(recorderTimer); $('#recorderError').textContent = ''; $('#recorderDialog').showModal();
+  try {
+    const recording = await api(`/projects/${testsProjectId}/recordings`, {method: 'POST', body: '{}'});
+    recorderId = recording.id; renderRecording(recording); pollRecording();
+  } catch (error) { $('#recorderError').textContent = error.message; }
+};
+$$('[data-verify]').forEach(button => { button.onclick = async () => {
+  try { await api(`/recordings/${recorderId}/commands`, {method: 'POST', body: JSON.stringify({command: `verify_${button.dataset.verify}`})}); toast('대상 브라우저에서 검증할 요소를 클릭하세요.'); }
+  catch (error) { $('#recorderError').textContent = error.message; }
+}; });
+$('#addWait').onclick = () => { $('#waitEditor').hidden = !$('#waitEditor').hidden; };
+$('#saveWait').onclick = async () => {
+  try {
+    await api(`/recordings/${recorderId}/commands`, {method: 'POST', body: JSON.stringify({command: 'add_wait', selector: $('#waitSelector').value, state: $('#waitState').value, timeout: Number($('#waitTimeout').value)})});
+    $('#waitEditor').hidden = true; await pollRecording();
+  } catch (error) { $('#recorderError').textContent = error.message; }
+};
+$('#stopRecorder').onclick = async () => {
+  try { await api(`/recordings/${recorderId}/commands`, {method: 'POST', body: JSON.stringify({command: 'stop'})}); clearTimeout(recorderTimer); setTimeout(pollRecording, 300); }
+  catch (error) { $('#recorderError').textContent = error.message; }
+};
+$('#saveRecording').onclick = async () => {
+  try {
+    if (!recorderDraft.steps.length || !recorderDraft.expected.length) throw Error('Step과 Expected가 각각 하나 이상 필요합니다.');
+    await api(`/projects/${testsProjectId}/scenarios`, {method: 'POST', body: JSON.stringify({name: $('#recordedName').value, steps: recorderDraft.steps, expected: recorderDraft.expected})});
+    $('#recorderDialog').close(); await refreshTests(); await loadTestSummary(); toast('녹화 시나리오 저장 완료');
+  } catch (error) { $('#recorderError').textContent = error.message; }
+};
+$('#recorderDialog').onclose = () => {
+  clearTimeout(recorderTimer);
+  if (recorderId && !$('#stopRecorder').disabled) api(`/recordings/${recorderId}/commands`, {method: 'POST', body: JSON.stringify({command: 'stop'})}).catch(() => {});
+};
