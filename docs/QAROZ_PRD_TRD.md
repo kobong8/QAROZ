@@ -1,7 +1,6 @@
 ## 0. 제품 명칭
 
 - **Product name:** QAROZ
-- **Full name:** Quality Assurance Review & Orchestration with Zero-Trust
 - **Tagline:** Don't trust. Verify.
 - **Description:** Windows에서 여러 웹 애플리케이션의 시스템 상태, API, 브라우저 E2E, 보안 검사를 오케스트레이션하고 증거와 결과 이력을 통합 관리하는 local-first QA 플랫폼.
 - **Naming rule:** 사용자 UI, 문서, 코드 주석, 패키징에서 기존 가칭 `Web QA Manager`를 사용하지 않고 `QAROZ`로 통일한다.
@@ -27,7 +26,7 @@ V1.0 · Codex 구현용
 
 # 1. 제품 개요
 
-> **QAROZ** - **Quality Assurance Review & Orchestration with Zero-Trust**
+> **QAROZ**
 >
 > Local-first automated QA orchestration platform for web applications.
 >
