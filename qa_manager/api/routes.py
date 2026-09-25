@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from qa_manager.core.security import validate_http_url
 from qa_manager.runners.zap_runner import ZapRunner
@@ -175,6 +175,120 @@ def delete_scenario(request: Request, scenario_id: str):
     state(request).db.execute("DELETE FROM scenarios WHERE id=?", (scenario_id,))
 
 
+RECIPE_VERSION = 1
+API_RECIPE_FIELDS = (
+    "name", "method", "url", "headers", "query", "body", "expected_status",
+    "assertions", "max_response_ms", "enabled",
+)
+SCENARIO_RECIPE_FIELDS = (
+    "name", "runner_ref", "steps", "expected", "enabled", "tags",
+)
+
+
+@router.get("/projects/{project_id}/recipe")
+def export_recipe(request: Request, project_id: str):
+    project_value = state(request).projects.get(project_id)
+    if not project_value:
+        raise HTTPException(404, "Project not found")
+    cases = api_tests(request, project_id)
+    scenario_values = scenarios(request, project_id)
+    recipe = {
+        "format": "qaroz-recipe",
+        "version": RECIPE_VERSION,
+        "name": project_value["name"],
+        "api_tests": [
+            {key: item.get(key) for key in API_RECIPE_FIELDS} for item in cases
+        ],
+        "scenarios": [
+            {key: item.get(key) for key in SCENARIO_RECIPE_FIELDS}
+            for item in scenario_values
+        ],
+    }
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in project_value["name"])
+    return JSONResponse(
+        recipe,
+        headers={"Content-Disposition": f'attachment; filename="{safe_name or "project"}.qaroz.json"'},
+    )
+
+
+@router.post("/projects/{project_id}/recipe")
+def import_recipe(
+    request: Request, project_id: str, payload: dict[str, Any] = Body(...)
+):
+    if not state(request).projects.get(project_id):
+        raise HTTPException(404, "Project not found")
+    if payload.get("format") != "qaroz-recipe" or payload.get("version") != RECIPE_VERSION:
+        raise HTTPException(422, "Unsupported QAROZ recipe format or version")
+    cases, scenario_values = payload.get("api_tests"), payload.get("scenarios")
+    if not isinstance(cases, list) or not isinstance(scenario_values, list):
+        raise HTTPException(422, "api_tests and scenarios must be arrays")
+    if len(cases) + len(scenario_values) > 1000:
+        raise HTTPException(422, "A recipe may contain at most 1000 items")
+
+    # Reuse the public validators before changing the database, so malformed recipes
+    # cannot result in a partially imported instruction set.
+    normalized_cases: list[dict[str, Any]] = []
+    normalized_scenarios: list[dict[str, Any]] = []
+    for item in cases:
+        if not isinstance(item, dict):
+            raise HTTPException(422, "Each API recipe item must be an object")
+        try:
+            validate_http_url(item["url"])
+            expected_status = int(item.get("expected_status", 200))
+        except (KeyError, ValueError, TypeError) as exc:
+            raise HTTPException(422, f"Invalid API recipe item: {exc}") from exc
+        if not 100 <= expected_status <= 599 or not isinstance(item.get("assertions", {}), dict):
+            raise HTTPException(422, "Invalid API expected_status or assertions")
+        if not isinstance(item.get("headers", {}), dict) or not isinstance(item.get("query", {}), dict):
+            raise HTTPException(422, "API headers and query must be objects")
+        normalized_cases.append({
+            "id": str(uuid.uuid4()), "project_id": project_id,
+            **{key: item.get(key) for key in API_RECIPE_FIELDS},
+            "name": item.get("name", "API test"), "method": item.get("method", "GET").upper(),
+            "headers": item.get("headers", {}), "query": item.get("query", {}),
+            "expected_status": expected_status, "assertions": item.get("assertions", {}),
+            "enabled": bool(item.get("enabled", True)),
+        })
+    permitted = {"goto", "click", "fill", "select", "upload", "wait"}
+    for item in scenario_values:
+        if not isinstance(item, dict):
+            raise HTTPException(422, "Each scenario recipe item must be an object")
+        steps, expected = item.get("steps"), item.get("expected")
+        if not isinstance(steps, list) or not steps or not isinstance(expected, list) or not expected:
+            raise HTTPException(422, "Recipe scenarios require non-empty steps and expected arrays")
+        if any(not isinstance(step, dict) or step.get("action") not in permitted for step in steps):
+            raise HTTPException(422, "Unsupported scenario action in recipe")
+        for step in steps:
+            required = "url" if step["action"] == "goto" else "selector"
+            if not isinstance(step.get(required), str) or not step[required].strip():
+                raise HTTPException(422, f"Recipe scenario step requires {required}")
+            if step["action"] == "select" and "value" not in step:
+                raise HTTPException(422, "Recipe select action requires value")
+            if step["action"] == "upload" and not step.get("path"):
+                raise HTTPException(422, "Recipe upload action requires path")
+            if step["action"] == "wait":
+                try:
+                    step.update(validate_wait(step))
+                except ValueError as exc:
+                    raise HTTPException(422, str(exc)) from exc
+        for expected_item in expected:
+            if not isinstance(expected_item, dict) or expected_item.get("type", "visible") not in {"visible", "text", "count"} or not expected_item.get("selector"):
+                raise HTTPException(422, "Recipe expectations require a selector and visible/text/count type")
+            if expected_item.get("type") in {"text", "count"} and "value" not in expected_item:
+                raise HTTPException(422, "Recipe text/count expectations require value")
+        normalized_scenarios.append({
+            "id": str(uuid.uuid4()), "project_id": project_id,
+            **{key: item.get(key) for key in SCENARIO_RECIPE_FIELDS},
+            "name": item.get("name", "Scenario"), "enabled": bool(item.get("enabled", True)),
+            "tags": item.get("tags", []),
+        })
+    for item in normalized_cases:
+        state(request).db.insert("api_test_cases", item)
+    for item in normalized_scenarios:
+        state(request).db.insert("scenarios", item)
+    return {"api_tests": len(normalized_cases), "scenarios": len(normalized_scenarios)}
+
+
 @router.post("/projects/{project_id}/recordings", status_code=201)
 def start_recording(request: Request, project_id: str):
     project_value = state(request).projects.get(project_id)
@@ -242,6 +356,30 @@ def run_detail(request: Request, run_id: str):
 @router.get("/runs/{run_id}/results")
 def results(request: Request, run_id: str):
     return state(request).runs.results(run_id)
+
+
+@router.post("/runs/{run_id}/retry-failed", status_code=202)
+def retry_failed(request: Request, run_id: str):
+    previous = state(request).runs.get(run_id)
+    if not previous:
+        raise HTTPException(404, "Run not found")
+    project_value = state(request).projects.get(previous["project_id"])
+    failed = [
+        item for item in state(request).runs.results(run_id)
+        if item["status"] in {"FAIL", "ERROR"} and item["category"] in {"api", "e2e"}
+        and item.get("source_id")
+    ]
+    if not failed:
+        raise HTTPException(409, "No retryable failed API or E2E items")
+    categories = {item["category"] for item in failed}
+    suite = next(iter(categories)) if len(categories) == 1 else "all"
+    options = {
+        "api_case_ids": [item["source_id"] for item in failed if item["category"] == "api"],
+        "scenario_ids": [item["source_id"] for item in failed if item["category"] == "e2e"],
+        "retry_of": run_id,
+        "retry_categories": sorted(categories),
+    }
+    return state(request).runs.submit(project_value, suite, options, trigger=f"retry:{run_id}")
 
 
 @router.get("/artifacts/{artifact_id}")

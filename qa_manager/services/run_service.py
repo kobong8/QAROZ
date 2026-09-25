@@ -26,7 +26,8 @@ class RunService:
         self._lock = threading.Lock()
 
     def submit(
-        self, project: dict[str, Any], suite: str, options: dict[str, Any] | None = None
+        self, project: dict[str, Any], suite: str, options: dict[str, Any] | None = None,
+        trigger: str = "manual",
     ) -> dict[str, Any]:
         if suite not in {"system", "api", "e2e", "security", "all"}:
             raise ValueError("Unknown test suite")
@@ -42,7 +43,7 @@ class RunService:
                 "id": run_id,
                 "project_id": project["id"],
                 "suite": suite,
-                "trigger": "manual",
+                "trigger": trigger,
                 "started_at": utcnow(),
                 "status": Status.QUEUED.value,
                 "current_stage": "Queued",
@@ -58,7 +59,7 @@ class RunService:
         started = time.perf_counter()
         results: list[RunnerResult] = []
         try:
-            categories = (
+            categories = options.get("retry_categories") or (
                 [suite] if suite != "all" else ["system", "api", "e2e", "security"]
             )
             for category in categories:
@@ -111,7 +112,13 @@ class RunService:
                 "SELECT * FROM api_test_cases WHERE project_id=? AND enabled=1",
                 (project["id"],),
             )
-            return [ApiRunner().run(case) for case in cases] or [
+            selected = options.get("api_case_ids")
+            if selected is not None:
+                cases = [case for case in cases if case["id"] in selected]
+            results = [ApiRunner().run(case) for case in cases]
+            for result, case in zip(results, cases):
+                result.source_id = case["id"]
+            return results or [
                 RunnerResult(
                     "api", "API suite", Status.SKIPPED, message="No enabled API cases"
                 )
@@ -121,8 +128,11 @@ class RunService:
                 "SELECT * FROM scenarios WHERE project_id=? AND enabled=1",
                 (project["id"],),
             )
+            selected = options.get("scenario_ids")
+            if selected is not None:
+                scenarios = [scenario for scenario in scenarios if scenario["id"] in selected]
             directory = self.artifacts.run_dir(project["id"], run_id)
-            return [
+            results = [
                 PlaywrightRunner().run(
                     s,
                     directory,
@@ -130,7 +140,10 @@ class RunService:
                     project.get("project_path"),
                 )
                 for s in scenarios
-            ] or [
+            ]
+            for result, scenario in zip(results, scenarios):
+                result.source_id = scenario["id"]
+            return results or [
                 RunnerResult(
                     "e2e", "E2E suite", Status.SKIPPED, message="No enabled scenarios"
                 )
@@ -165,6 +178,7 @@ class RunService:
                 "duration_ms": result.duration_ms,
                 "message": result.message,
                 "details": result.details,
+                "source_id": result.source_id,
             },
         )
         for artifact in result.artifacts:

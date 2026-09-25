@@ -93,6 +93,15 @@ async function showRun(id) {
   if (projectId !== active?.id || version !== detailVersion) return;
   const box = $('#runDetail'); box.hidden = false; box.replaceChildren();
   box.append(node('h2', run.suite.toUpperCase() + ' · ' + run.status), node('p', new Date(run.started_at).toLocaleString()));
+  if (run.results.some(result => ['api', 'e2e'].includes(result.category) && ['FAIL', 'ERROR'].includes(result.status) && result.source_id)) {
+    const retry = node('button', '↻ 실패한 API/E2E 항목만 다시 실행', 'primary');
+    retry.onclick = async () => {
+      retry.disabled = true;
+      try { await api(`/runs/${run.id}/retry-failed`, {method: 'POST', body: '{}'}); toast('실패 항목 재실행을 예약했습니다.'); await loadRuns(); }
+      catch (error) { toast(error.message); retry.disabled = false; }
+    };
+    box.append(retry);
+  }
   for (const result of run.results) {
     const item = node('article', null, 'result');
     item.append(badge(result.status), node('h3', result.category.toUpperCase() + ' · ' + result.test_name), node('p', result.message));
@@ -197,6 +206,30 @@ $('#manageTests').onclick = async () => {
   testsProjectId = active.id; $('#testsProject').textContent = active.name; $('#testsError').textContent = '';
   $('#apiForm').elements.url.value = (active.backend_urls?.[0] || active.backend_url || active.frontend_url) + '/'; $('#testsDialog').showModal();
   try { await refreshTests(); } catch (error) { $('#testsError').textContent = error.message; }
+};
+$('#exportRecipe').onclick = async () => {
+  if (!testsProjectId) return;
+  try {
+    const response = await fetch(`/api/projects/${testsProjectId}/recipe`);
+    if (!response.ok) throw Error((await response.json()).detail || response.statusText);
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(await response.blob());
+    link.download = `${active?.name || 'project'}.qaroz.json`;
+    link.click(); URL.revokeObjectURL(link.href); toast('JSON 작업 지시서를 저장했습니다.');
+  } catch (error) { $('#testsError').textContent = error.message; }
+};
+$('#importRecipe').onclick = () => $('#recipeFile').click();
+$('#recipeFile').onchange = async event => {
+  const file = event.target.files[0];
+  if (!file || !testsProjectId) return;
+  try {
+    const recipe = JSON.parse(await file.text());
+    const result = await api(`/projects/${testsProjectId}/recipe`, {method: 'POST', body: JSON.stringify(recipe)});
+    await refreshTests(); await loadTestSummary();
+    toast(`작업 지시서에서 API ${result.api_tests}개, E2E ${result.scenarios}개를 추가했습니다.`);
+    $('#testsError').textContent = '';
+  } catch (error) { $('#testsError').textContent = `불러오기 실패: ${error.message}`; }
+  finally { event.target.value = ''; }
 };
 for (const [formId, endpoint] of [['apiForm', 'api-tests'], ['scenarioForm', 'scenarios']]) {
   $('#' + formId).onsubmit = async event => {

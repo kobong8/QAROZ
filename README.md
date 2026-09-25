@@ -105,6 +105,9 @@ Expected:
 계열 입력은 `${SECRET:필드명}`으로 치환되므로 실행 환경의 안전한 값으로 별도 주입해야 합니다.
 제품 명세와 구현 기록은 [`docs/QAROZ_PRD_TRD.md`](docs/QAROZ_PRD_TRD.md) 및
 [`docs/SCENARIO_RECORDER_IMPLEMENTATION.md`](docs/SCENARIO_RECORDER_IMPLEMENTATION.md)를 참조하세요.
+API/E2E 목록은 관리 화면에서 버전이 있는 JSON 작업 지시서로 저장하고 다른 프로젝트에
+불러올 수 있습니다. 실행 상세에서는 `FAIL`/`ERROR`인 API·E2E 항목만 새 이력으로 다시
+실행할 수 있습니다. 형식과 동작은 [`docs/TEST_RECIPE_AND_RETRY.md`](docs/TEST_RECIPE_AND_RETRY.md)를 참조하세요.
 기본 body 검사는 빈 앱 shell도 통과할 수 있으므로 업무 기능 검증 완료로 해석하지 마세요.
 등록된 테스트가 없으면 `SKIPPED`, 검증 불일치는 `FAIL`, 도구 실행 문제는 `ERROR`입니다.
 브라우저 console 오류나 HTTP 4xx/5xx 관측은 `WARNING`과 로그로 남깁니다.

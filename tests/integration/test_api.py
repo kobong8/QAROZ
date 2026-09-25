@@ -103,3 +103,37 @@ def test_backend_urls_must_be_an_array(tmp_path: Path):
         )
         assert response.status_code == 422
         assert "backend_urls must be an array" in response.json()["detail"]
+
+
+def test_recipe_round_trip_and_rejects_unknown_version(tmp_path: Path):
+    settings = Settings(tmp_path, tmp_path / "d", tmp_path / "a", tmp_path / "d" / "db.sqlite")
+    with TestClient(create_app(settings)) as client:
+        first = client.post("/api/projects", json={"name": "Source", "frontend_url": "http://localhost:5173"}).json()
+        second = client.post("/api/projects", json={"name": "Target", "frontend_url": "http://localhost:5174"}).json()
+        client.post(f"/api/projects/{first['id']}/api-tests", json={"name": "Health", "url": "http://localhost:8000/health"})
+        client.post(f"/api/projects/{first['id']}/scenarios", json={"name": "Home", "steps": [{"action": "goto", "url": "/"}], "expected": [{"type": "visible", "selector": "body"}]})
+
+        exported = client.get(f"/api/projects/{first['id']}/recipe")
+        assert exported.status_code == 200
+        assert "attachment" in exported.headers["content-disposition"]
+        assert exported.json()["format"] == "qaroz-recipe"
+        imported = client.post(f"/api/projects/{second['id']}/recipe", json=exported.json())
+        assert imported.json() == {"api_tests": 1, "scenarios": 1}
+        assert len(client.get(f"/api/projects/{second['id']}/api-tests").json()) == 1
+        bad = {**exported.json(), "version": 999}
+        assert client.post(f"/api/projects/{second['id']}/recipe", json=bad).status_code == 422
+
+
+def test_retry_failed_selects_only_failed_api_and_e2e_items(tmp_path: Path):
+    settings = Settings(tmp_path, tmp_path / "d", tmp_path / "a", tmp_path / "d" / "db.sqlite")
+    with TestClient(create_app(settings)) as client:
+        project = client.post("/api/projects", json={"name": "Retry", "frontend_url": "http://localhost:5173"}).json()
+        case = client.post(f"/api/projects/{project['id']}/api-tests", json={"name": "Broken", "url": "http://127.0.0.1:1"}).json()
+        db = client.app.state.db
+        run_id = db.insert("test_runs", {"project_id": project["id"], "suite": "api", "trigger": "manual", "started_at": "2026-01-01T00:00:00+00:00", "status": "FAIL"})
+        db.insert("test_results", {"run_id": run_id, "category": "api", "test_name": "Broken", "status": "ERROR", "duration_ms": 1, "details": {}, "source_id": case["id"]})
+
+        retried = client.post(f"/api/runs/{run_id}/retry-failed")
+        assert retried.status_code == 202
+        assert retried.json()["trigger"] == f"retry:{run_id}"
+        assert client.post(f"/api/runs/{retried.json()['id']}/retry-failed").status_code in {409, 202}
