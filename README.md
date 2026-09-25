@@ -1,6 +1,6 @@
 # QAROZ
 
-_Don't trust. Verify._
+_QA Manager._
 
 ## 처음 시작하기 (Windows / 한국어)
 
