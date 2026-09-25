@@ -12,6 +12,7 @@ from qa_manager.core.database import Database
 from qa_manager.services.artifact_service import ArtifactService
 from qa_manager.services.project_service import ProjectService
 from qa_manager.services.run_service import RunService
+from qa_manager.services.scenario_recorder import ScenarioRecorderService
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -27,7 +28,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.projects = ProjectService(db)
         app.state.artifacts = artifacts
         app.state.runs = RunService(db, artifacts, config.max_concurrent_runs)
+        app.state.recorder = ScenarioRecorderService()
         yield
+        app.state.recorder.close()
         app.state.runs.executor.shutdown(wait=False, cancel_futures=True)
 
     app = FastAPI(title="QAROZ", version="1.0.0", lifespan=lifespan)

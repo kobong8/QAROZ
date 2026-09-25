@@ -39,3 +39,11 @@ def test_navigation_http_error_is_not_a_pass():
     import pytest
     with pytest.raises(AssertionError, match="HTTP 404"):
         PlaywrightRunner._step(page, {"action": "goto", "url": "/missing"}, "http://localhost", None)
+
+
+def test_wait_uses_condition_state_and_ten_second_default():
+    calls = []
+    locator = SimpleNamespace(wait_for=lambda **kwargs: calls.append(kwargs))
+    page = SimpleNamespace(locator=lambda selector: locator)
+    PlaywrightRunner._step(page, {"action": "wait", "selector": "#ready", "state": "attached"}, "http://localhost", None)
+    assert calls == [{"state": "attached", "timeout": 10000}]

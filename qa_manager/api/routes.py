@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 
 from qa_manager.core.security import validate_http_url
 from qa_manager.runners.zap_runner import ZapRunner
+from qa_manager.services.scenario_recorder import validate_wait
 
 router = APIRouter(prefix="/api")
 
@@ -142,6 +143,12 @@ def create_scenario(
             raise HTTPException(422, "select requires value")
         if step["action"] == "upload" and not step.get("path"):
             raise HTTPException(422, "upload requires path")
+        if step["action"] == "wait":
+            try:
+                normalized = validate_wait(step)
+                step.update(normalized)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
     for item in expected:
         if not isinstance(item, dict) or item.get("type", "visible") not in {"visible", "text", "count"} or not item.get("selector"):
             raise HTTPException(422, "Expected results require a selector and visible/text/count type")
@@ -166,6 +173,33 @@ def create_scenario(
 @router.delete("/scenarios/{scenario_id}", status_code=204)
 def delete_scenario(request: Request, scenario_id: str):
     state(request).db.execute("DELETE FROM scenarios WHERE id=?", (scenario_id,))
+
+
+@router.post("/projects/{project_id}/recordings", status_code=201)
+def start_recording(request: Request, project_id: str):
+    project_value = state(request).projects.get(project_id)
+    if not project_value:
+        raise HTTPException(404, "Project not found")
+    return state(request).recorder.start(project_id, project_value["frontend_url"])
+
+
+@router.get("/recordings/{recording_id}")
+def recording(request: Request, recording_id: str):
+    result = state(request).recorder.get(recording_id)
+    if not result:
+        raise HTTPException(404, "Recording not found")
+    return result
+
+
+@router.post("/recordings/{recording_id}/commands")
+def recording_command(request: Request, recording_id: str, payload: dict[str, Any] = Body(...)):
+    try:
+        result = state(request).recorder.command(recording_id, payload.get("command", ""), payload)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if not result:
+        raise HTTPException(404, "Recording not found")
+    return result
 
 
 @router.post("/projects/{project_id}/run/{suite}", status_code=202)

@@ -88,7 +88,7 @@ E2E의 Steps와 Expected는 JSON 배열입니다. 첫 검사는 기본 페이지
   {"action":"goto","url":"/"},
   {"action":"fill","selector":"[data-testid=search-input]","value":"sample"},
   {"action":"click","selector":"[data-testid=search-button]"},
-  {"action":"wait","selector":"[data-testid=search-results]"}
+  {"action":"wait","selector":"[data-testid=search-results]","state":"visible","timeout":10000}
 ]
 ```
 
@@ -100,6 +100,11 @@ Expected:
 
 지원 액션: `goto`, `click`, `fill`, `select`, `upload`, `wait`.
 지원 검증: `visible`, `text`, `count`. 인증 헤더 등 고급 API 옵션은 `/docs`에서 등록할 수 있습니다.
+`RECORD SCENARIO`를 누르면 headed Chromium에서 동작을 기록할 수 있습니다. 녹화 중 검증과
+조건 기반 Wait를 추가하고, 완료 후 항목을 수정·삭제·재정렬하여 저장하세요. 비밀번호와 secret
+계열 입력은 `${SECRET:필드명}`으로 치환되므로 실행 환경의 안전한 값으로 별도 주입해야 합니다.
+제품 명세와 구현 기록은 [`docs/QAROZ_PRD_TRD.md`](docs/QAROZ_PRD_TRD.md) 및
+[`docs/SCENARIO_RECORDER_IMPLEMENTATION.md`](docs/SCENARIO_RECORDER_IMPLEMENTATION.md)를 참조하세요.
 기본 body 검사는 빈 앱 shell도 통과할 수 있으므로 업무 기능 검증 완료로 해석하지 마세요.
 등록된 테스트가 없으면 `SKIPPED`, 검증 불일치는 `FAIL`, 도구 실행 문제는 `ERROR`입니다.
 브라우저 console 오류나 HTTP 4xx/5xx 관측은 `WARNING`과 로그로 남깁니다.
