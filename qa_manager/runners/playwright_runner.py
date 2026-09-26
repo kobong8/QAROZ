@@ -22,6 +22,8 @@ class PlaywrightRunner:
         console_errors: list[str] = []
         network_errors: list[dict[str, Any]] = []
         artifacts: list[dict[str, Any]] = []
+        current_step = None
+        current_expectation = None
         try:
             from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
         except ImportError:
@@ -45,10 +47,14 @@ class PlaywrightRunner:
                         {"status": response.status, "url": response.url}
                     ) if response.status >= 400 else None)
                     try:
-                        for step in scenario.get("steps", []):
+                        for index, step in enumerate(scenario.get("steps", []), 1):
+                            current_step = {"index": index, "action": step.get("action"), "selector": step.get("selector")}
                             self._step(page, step, base_url, project_path)
+                        current_step = None
                         for expectation in scenario.get("expected", []):
+                            current_expectation = expectation
                             self._expect(page, expectation)
+                        current_expectation = None
                         status = Status.WARNING if console_errors or network_errors else Status.PASS
                         message = "Scenario completed" + ("; browser console/network errors were observed" if status == Status.WARNING else "")
                     except (AssertionError, PlaywrightTimeoutError) as exc:
@@ -82,7 +88,8 @@ class PlaywrightRunner:
             status,
             int((time.perf_counter() - started) * 1000),
             message,
-            {"console_errors": console_errors, "network_errors": network_errors},
+            {"console_errors": console_errors, "network_errors": network_errors,
+             "failed_step": current_step, "failed_expectation": current_expectation},
             artifacts,
         )
 

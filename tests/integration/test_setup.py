@@ -21,7 +21,8 @@ def test_optional_security_and_explicit_scan(tmp_path: Path, monkeypatch):
         assert client.get("/api/settings").json()["security_enabled"] == "false"
         assert service._run_category("security", "unused", project, {})[0].status == Status.SKIPPED
         assert not calls
-        assert service._run_category("security", "unused", project, {"security_requested": True})[0].status == Status.ERROR
+        project = client.put(f"/api/projects/{project['id']}", json={"zap_enabled": True}).json()
+        assert service._run_category("security", "unused", project, {})[0].status == Status.ERROR
         assert len(calls) == 1
         assert client.put("/api/settings", json={"security_enabled": True}).json()["security_enabled"] == "true"
         assert service._run_category("security", "unused", project, {})[0].status == Status.ERROR

@@ -1,5 +1,11 @@
 # Scenario Recorder 및 조건 기반 Wait 구현 기록
 
+## Regression 연동
+
+Recorder가 저장하는 steps/expected는 동일하다. 저장된 Scenario의 `regression_enabled` 기본값은
+`true`이며, 프로젝트 검사 준비의 Regression 탭에서 포함 여부·group·order를 편집할 수 있다.
+실행/재시도/증거 저장은 [Regression & Trivy 명세](REGRESSION_AND_TRIVY.md)를 참조한다.
+
 ## 목적
 
 기존 Playwright Runner의 Scenario JSON(`steps`, `expected`) 계약은 변경하지 않고, headed Chromium에서 사용자의 작업을 수집해 같은 JSON을 만드는 Recorder 계층을 추가했다.

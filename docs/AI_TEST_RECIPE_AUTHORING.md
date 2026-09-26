@@ -69,6 +69,10 @@
 
 ## 4. E2E 시나리오 스키마
 
+회귀 검사 선택 필드도 지원한다: `regression_enabled`(boolean, 기본 true),
+`group`(최대 200자 string/null, 기본 null), `order`(32비트 integer, 기본 0).
+각 시나리오는 독립된 브라우저에서 실행되므로 이전 시나리오의 로그인/쿠키를 전제로 작성하지 않는다.
+
 각 `scenarios` 항목은 다음 구조를 사용한다. `steps`와 `expected`는 각각 하나 이상의 항목이 필요하다.
 
 ```json

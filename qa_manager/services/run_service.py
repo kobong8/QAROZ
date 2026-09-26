@@ -13,7 +13,9 @@ from qa_manager.runners.api_runner import ApiRunner
 from qa_manager.runners.playwright_runner import PlaywrightRunner
 from qa_manager.runners.system_runner import SystemRunner
 from qa_manager.runners.zap_runner import ZapRunner
+from qa_manager.runners.trivy_runner import TrivyRunner
 from .artifact_service import ArtifactService
+from .regression_service import RegressionService
 
 
 class RunService:
@@ -29,8 +31,10 @@ class RunService:
         self, project: dict[str, Any], suite: str, options: dict[str, Any] | None = None,
         trigger: str = "manual",
     ) -> dict[str, Any]:
-        if suite not in {"system", "api", "e2e", "security", "all"}:
+        if suite not in {"system", "api", "e2e", "security", "all", "regression", "zap", "trivy"}:
             raise ValueError("Unknown test suite")
+        if (options or {}).get("active") and suite != "zap":
+            raise ValueError("Active scanning requires an explicit ZAP run")
         with self._lock:
             if suite == "all" and project["id"] in self._active:
                 raise RuntimeError("A Run All is already active for this project")
@@ -49,7 +53,7 @@ class RunService:
                 "current_stage": "Queued",
             },
         )
-        run_options = {**(options or {}), "security_requested": suite == "security"}
+        run_options = dict(options or {})
         self.executor.submit(self._execute, run_id, project, suite, run_options)
         return self.get(run_id)  # type: ignore[return-value]
 
@@ -106,6 +110,8 @@ class RunService:
         project: dict[str, Any],
         options: dict[str, Any],
     ) -> list[RunnerResult]:
+        if category == "regression":
+            return RegressionService(self.db, self.artifacts).run(project, run_id, options)
         if category == "system":
             return SystemRunner().run(project)
         if category == "api":
@@ -153,20 +159,34 @@ class RunService:
             row["key"]: row["value"]
             for row in self.db.fetchall("SELECT * FROM settings")
         }
-        if not options.get("security_requested") and settings.get("security_enabled", "false") != "true":
-            return [RunnerResult(
-                "security", "ZAP Scan", Status.SKIPPED,
-                message="Security is not enabled for Run All. Install/start ZAP, configure its API, then enable security in Settings.",
-            )]
-        result, alerts = ZapRunner().run(
-            project["frontend_url"],
-            settings.get("zap_api_url", "http://127.0.0.1:8090"),
-            active=bool(options.get("active")),
-            allowed_active_hosts=json.loads(settings.get("allowed_active_hosts", "[]")),
-        )
-        for alert in alerts:
-            self.db.insert("zap_alerts", {"run_id": run_id, **alert})
-        return [result]
+        results = []
+        zap_enabled = project.get("zap_enabled")
+        if zap_enabled is None:
+            zap_enabled = settings.get("security_enabled", "false") == "true"
+        if category in {"security", "zap"}:
+            if zap_enabled:
+                result, alerts = ZapRunner().run(
+                    project["frontend_url"], settings.get("zap_api_url", "http://127.0.0.1:8090"),
+                    active=category == "zap" and options.get("active") is True,
+                    allowed_active_hosts=json.loads(settings.get("allowed_active_hosts", "[]")),
+                )
+                result.details["scanner"] = "zap"
+                for alert in alerts:
+                    self.db.insert("zap_alerts", {"run_id": run_id, **alert})
+            else:
+                result = RunnerResult("security", "ZAP", Status.SKIPPED, message="ZAP is disabled for this project", details={"scanner": "zap"})
+            results.append(result)
+        if category in {"security", "trivy"}:
+            if project.get("trivy_enabled", False):
+                result = TrivyRunner().run(
+                    project.get("project_path"), self.artifacts.run_dir(project["id"], run_id),
+                    configured=settings.get("trivy_executable"),
+                    scanners=project.get("trivy_scanners", ["vuln", "misconfig", "secret"]),
+                )
+            else:
+                result = RunnerResult("security", "Trivy", Status.SKIPPED, message="Trivy is disabled for this project", details={"scanner": "trivy"})
+            results.append(result)
+        return results
 
     def _save_result(self, run_id: str, result: RunnerResult) -> None:
         result_id = self.db.insert(
@@ -189,10 +209,22 @@ class RunService:
         return self.db.fetchone("SELECT * FROM test_runs WHERE id=?", (run_id,))
 
     def list(self, project_id: str) -> list[dict[str, Any]]:
-        return self.db.fetchall(
+        runs = self.db.fetchall(
             "SELECT * FROM test_runs WHERE project_id=? ORDER BY started_at DESC",
             (project_id,),
         )
+        counts = self.db.fetchall(
+            "SELECT r.run_id, r.status, COUNT(*) AS count FROM test_results r "
+            "JOIN test_runs t ON t.id=r.run_id WHERE t.project_id=? GROUP BY r.run_id, r.status",
+            (project_id,),
+        )
+        summaries = {run["id"]: {status: 0 for status in ("PASS", "FAIL", "WARNING", "ERROR", "SKIPPED")} for run in runs}
+        for item in counts:
+            if item["run_id"] in summaries:
+                summaries[item["run_id"]][item["status"]] = item["count"]
+        for run in runs:
+            run["summary"] = summaries[run["id"]]
+        return runs
 
     def clear_history(self, project_id: str) -> int:
         # One statement also cascades to results, alerts, and artifact records.

@@ -13,7 +13,9 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from qa_manager.core.security import validate_http_url
 from qa_manager.runners.zap_runner import ZapRunner
+from qa_manager.runners.trivy_runner import TrivyRunner
 from qa_manager.services.scenario_recorder import validate_wait
+from qa_manager.services.regression_service import regression_fields
 
 router = APIRouter(prefix="/api")
 
@@ -164,6 +166,7 @@ def create_scenario(
         "expected": payload.get("expected", []),
         "enabled": bool(payload.get("enabled", True)),
         "tags": payload.get("tags", []),
+        **validate_regression(payload),
     }
     state(request).db.insert("scenarios", data)
     return state(request).db.fetchone(
@@ -183,7 +186,32 @@ API_RECIPE_FIELDS = (
 )
 SCENARIO_RECIPE_FIELDS = (
     "name", "runner_ref", "steps", "expected", "enabled", "tags",
+    "regression_enabled", "group", "order",
 )
+
+
+def validate_regression(payload):
+    try:
+        return regression_fields(payload)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.patch("/scenarios/{scenario_id}")
+def update_scenario_metadata(request: Request, scenario_id: str, payload: dict[str, Any] = Body(...)):
+    db = state(request).db
+    current = db.fetchone("SELECT * FROM scenarios WHERE id=?", (scenario_id,))
+    if not current:
+        raise HTTPException(404, "Scenario not found")
+    if set(payload) - {"regression_enabled", "group", "order", "enabled"}:
+        raise HTTPException(422, "Only scenario selection metadata can be updated")
+    values = validate_regression({**current, **payload})
+    enabled = payload.get("enabled", current["enabled"])
+    if type(enabled) is not bool:
+        raise HTTPException(422, "enabled must be a boolean")
+    db.execute('UPDATE scenarios SET regression_enabled=?, "group"=?, "order"=?, enabled=? WHERE id=?',
+               (values["regression_enabled"], values["group"], values["order"], enabled, scenario_id))
+    return db.fetchone("SELECT * FROM scenarios WHERE id=?", (scenario_id,))
 
 
 @router.get("/projects/{project_id}/recipe")
@@ -285,6 +313,7 @@ def import_recipe(
             **{key: item.get(key) for key in SCENARIO_RECIPE_FIELDS},
             "name": item.get("name", "Scenario"), "enabled": bool(item.get("enabled", True)),
             "tags": item.get("tags", []),
+            **validate_regression(item),
         })
     for item in normalized_cases:
         state(request).db.insert("api_test_cases", item)
@@ -332,6 +361,16 @@ def run(
         raise HTTPException(404, "Project not found")
     if not project_value["enabled"]:
         raise HTTPException(409, "Project is disabled")
+    options = options or {}
+    if set(options) - {"active", "group", "scenario_ids", "api_case_ids"}:
+        raise HTTPException(422, "Unsupported run option")
+    if "active" in options and (type(options["active"]) is not bool or suite != "zap"):
+        raise HTTPException(422, "active is a boolean supported only for explicit ZAP runs")
+    if "group" in options and options["group"] is not None and not isinstance(options["group"], str):
+        raise HTTPException(422, "group must be a string or null")
+    for key in ("scenario_ids", "api_case_ids"):
+        if key in options and (not isinstance(options[key], list) or any(not isinstance(item, str) for item in options[key])):
+            raise HTTPException(422, f"{key} must be an array of IDs")
     try:
         return state(request).runs.submit(project_value, suite, options)
     except ValueError as exc:
@@ -370,10 +409,12 @@ def results(request: Request, run_id: str):
 
 
 @router.post("/runs/{run_id}/retry-failed", status_code=202)
-def retry_failed(request: Request, run_id: str):
+def retry_failed(request: Request, run_id: str, payload: dict[str, Any] | None = Body(default=None)):
     previous = state(request).runs.get(run_id)
     if not previous:
         raise HTTPException(404, "Run not found")
+    if previous["status"] in {"RUNNING", "QUEUED"}:
+        raise HTTPException(409, "Wait for the run to finish before retrying")
     project_value = state(request).projects.get(previous["project_id"])
     if not project_value or not project_value["enabled"]:
         raise HTTPException(409, "Project is unavailable or disabled")
@@ -392,15 +433,23 @@ def retry_failed(request: Request, run_id: str):
         if item["status"] in {"FAIL", "ERROR"} and item["category"] in {"api", "e2e"}
         and item.get("source_id") in enabled_ids[item["category"]]
     ]
+    if previous["suite"] == "regression":
+        regression_ids = {row["id"] for row in state(request).db.fetchall(
+            "SELECT id FROM scenarios WHERE project_id=? AND regression_enabled=1",
+            (project_value["id"],),
+        )}
+        failed = [item for item in failed if item["source_id"] in regression_ids]
+    if payload and "scenario_id" in payload:
+        failed = [item for item in failed if item["category"] == "e2e" and item["source_id"] == payload["scenario_id"]]
     if not failed:
         raise HTTPException(409, "No retryable failed API or E2E items")
     categories = {item["category"] for item in failed}
-    suite = next(iter(categories)) if len(categories) == 1 else "all"
+    suite = "regression" if previous["suite"] == "regression" else next(iter(categories)) if len(categories) == 1 else "all"
     options = {
         "api_case_ids": [item["source_id"] for item in failed if item["category"] == "api"],
         "scenario_ids": [item["source_id"] for item in failed if item["category"] == "e2e"],
         "retry_of": run_id,
-        "retry_categories": sorted(categories),
+        "retry_categories": ["regression"] if suite == "regression" else sorted(categories),
     }
     try:
         return state(request).runs.submit(project_value, suite, options, trigger=f"retry:{run_id}")
@@ -436,7 +485,7 @@ def settings(request: Request):
 
 @router.put("/settings")
 def update_settings(request: Request, payload: dict[str, Any] = Body(...)):
-    allowed = {"zap_api_url", "zap_executable", "allowed_active_hosts", "security_enabled"}
+    allowed = {"zap_api_url", "zap_executable", "allowed_active_hosts", "security_enabled", "trivy_executable"}
     for key, value in payload.items():
         if key not in allowed:
             continue
@@ -451,6 +500,13 @@ def update_settings(request: Request, payload: dict[str, Any] = Body(...)):
             value = "true" if value is True or value == "true" else "false"
         if key == "zap_executable" and value and not Path(value).expanduser().is_file():
             raise HTTPException(422, "ZAP executable does not exist")
+        if key == "trivy_executable" and not isinstance(value, str):
+            raise HTTPException(422, "trivy_executable must be a path string or empty string")
+        if key == "trivy_executable" and value:
+            try:
+                TrivyRunner.executable(value)
+            except (ValueError, TypeError, OSError) as exc:
+                raise HTTPException(422, "Select an existing local Trivy executable") from exc
         serialized = json.dumps(value) if isinstance(value, list) else str(value)
         state(request).db.execute(
             "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -463,6 +519,11 @@ def update_settings(request: Request, payload: dict[str, Any] = Body(...)):
 def zap_status(request: Request):
     config = settings(request)
     return ZapRunner().status(config["zap_api_url"])
+
+
+@router.get("/system/trivy/status")
+def trivy_status(request: Request):
+    return TrivyRunner().status(settings(request).get("trivy_executable"))
 
 
 @router.get("/system/readiness")

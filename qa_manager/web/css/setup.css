@@ -10,13 +10,62 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f3f1e9; paddi
 textarea, select { width: 100%; padding: 10px; margin-top: 6px; border: 1px solid var(--ink); background: white; font: inherit; }
 textarea { resize: vertical; }
 dialog { max-height: 90vh; overflow-y: auto; }
-#testsDialog { width: min(900px, 94vw); }
-#testsDialog form { padding: 0; }
 .result { padding: 18px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .result h3 { margin: 8px 0; }
 .artifact { display: inline-block; margin: 8px 20px 0 0; color: var(--green); }
 .test-item { display: flex; gap: 16px; align-items: start; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .test-item details { min-width: 0; flex: 1; }
 button:disabled { opacity: .5; cursor: not-allowed; }
-#toast { max-width: min(600px, 90vw); }
+#toast { max-width: min(600px, 90vw); visibility: hidden; opacity: 0; pointer-events: none; }
+#toast.show { visibility: visible; opacity: 1; }
+.preparation { margin-top: 28px; }
+.preparation > .panel-title { padding: 0 0 18px; }
+.preparation > .panel-title p { margin: 0; font-size: 12px; }
+.prep-panel { min-width: 0; }
+.prep-panel .panel-title { padding: 0; border: 0; }
+.prep-panel h3 { margin: 12px 0; }
+.prep-panel .muted { padding: 0; }
+.prep-summary { color: var(--muted); font-size: 13px; }
+.editor { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 16px; }
+.editor > summary, .scanner-actions > summary { cursor: pointer; font-weight: bold; }
+.editor form { max-width: 760px; padding: 0; }
+.preparation-footer { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 8px; }
+.preparation-footer p { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+.preparation-footer .error { color: var(--red); }
+.scanner-actions { margin-bottom: 28px; }
+.scanner-actions .actions { margin: 12px 0; }
+.suite-results { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--line); border-top: 0; background: white; }
+.suite-results p { padding: 16px; margin: 0; min-width: 0; overflow-wrap: anywhere; border-right: 1px solid var(--line); }
+.suite-results strong, .suite-results span { display: block; }
+.suite-results span { font-size: 12px; margin-top: 6px; white-space: pre-line; }
+.suite-results p:last-child { border-right: 0; }
+.prep-tabs { display: flex; gap: 6px; overflow-x: auto; border-bottom: 1px solid var(--line); margin: 12px 0 20px; }
+.prep-tabs [role="tab"], .prep-tabs button { white-space: nowrap; border-bottom: 3px solid transparent; box-shadow: none; }
+.prep-tabs [aria-selected="true"] { background: var(--ink); color: var(--lime); border-bottom-color: var(--lime); }
+.prep-panel { padding: 4px 0 8px; }
+.prep-panel > p:first-child { color: var(--muted); }
+.prep-summary { overflow-wrap: anywhere; }
+.prep-summary p { margin: 8px 0; }
+.section-heading { margin: 36px 0 14px; font: 700 24px sans-serif; }
+.results-heading { display: flex; justify-content: space-between; align-items: end; gap: 18px; margin-top: 28px; }
+.results-heading .section-heading { margin-top: 0; }
+.run-actions { gap: 8px; }
+.run-actions { margin: 24px 0; }
+.preparation .panel-title > p { max-width: 50%; text-align: right; }
+.regression-row { display: grid; grid-template-columns: minmax(180px, 2fr) minmax(100px, 1fr) 85px auto; gap: 12px; align-items: center; border-bottom: 1px solid var(--line); padding: 10px 0; }
+.regression-row label { margin: 0; }
+.regression-row input { min-width: 0; }
+#regressionMetric { font-size: 13px; overflow-wrap: anywhere; }
+.run > span:last-child:nth-child(5) { grid-column: 1 / -1; font-size: 12px; }
+#trivyTarget, #zapTarget { overflow-wrap: anywhere; }
+@media (max-width: 760px) { .regression-row { grid-template-columns: 1fr 1fr; } .panel-title { flex-wrap: wrap; gap: 12px; } }
+@media (max-width: 760px) {
+  .padded { padding: 16px; }
+  .preparation .panel-title > p { max-width: 100%; text-align: left; }
+  .suite-results { grid-template-columns: 1fr; }
+  .suite-results p { border-right: 0; border-bottom: 1px solid var(--line); }
+  .suite-results p:last-child { border-bottom: 0; }
+  .results-heading { align-items: center; }
+  .status { min-width: 0; padding: 10px; }
+}
 @media (max-width: 760px) { header { height: auto; min-height: 74px; flex-wrap: wrap; gap: 12px; padding: 12px; } .header-actions { gap: 10px; } }

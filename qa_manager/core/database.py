@@ -54,6 +54,7 @@ CREATE INDEX IF NOT EXISTS idx_results_run ON test_results(run_id);
 """
 
 JSON_FIELDS = {
+    "trivy_scanners",
     "expected_ports",
     "process_rules",
     "backend_urls",
@@ -96,6 +97,24 @@ class Database:
             }
             if "source_id" not in result_columns:
                 connection.execute("ALTER TABLE test_results ADD COLUMN source_id TEXT")
+            # Additive migrations preserve existing scenarios and run history.
+            additions = {
+                "projects": {
+                    "zap_enabled": "INTEGER",
+                    "trivy_enabled": "INTEGER NOT NULL DEFAULT 0",
+                    "trivy_scanners": "TEXT NOT NULL DEFAULT '[\"vuln\",\"misconfig\",\"secret\"]'",
+                },
+                "scenarios": {
+                    "regression_enabled": "INTEGER NOT NULL DEFAULT 1",
+                    "group": "TEXT",
+                    "order": "INTEGER NOT NULL DEFAULT 0",
+                },
+            }
+            for table, fields in additions.items():
+                existing = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
+                for field, definition in fields.items():
+                    if field not in existing:
+                        connection.execute(f'ALTER TABLE {table} ADD COLUMN "{field}" {definition}')
             # Preserve projects created by releases that only supported one backend.
             connection.execute(
                 "UPDATE projects SET backend_urls=json_array(backend_url) "
@@ -128,8 +147,9 @@ class Database:
                     result[key] = json.loads(result[key])
                 except (json.JSONDecodeError, TypeError):
                     pass
-        if "enabled" in result:
-            result["enabled"] = bool(result["enabled"])
+        for field in ("enabled", "regression_enabled", "zap_enabled", "trivy_enabled"):
+            if field in result and result[field] is not None:
+                result[field] = bool(result[field])
         return result
 
     def fetchone(self, sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
@@ -156,7 +176,7 @@ class Database:
             )
             for k, v in clean.items()
         }
-        columns = ",".join(encoded)
+        columns = ",".join(f'"{key}"' for key in encoded)
         placeholders = ",".join("?" for _ in encoded)
         self.execute(
             f"INSERT INTO {table} ({columns}) VALUES ({placeholders})",

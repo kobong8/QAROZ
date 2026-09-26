@@ -63,6 +63,23 @@ class ProjectService:
             else [r.strip() for r in rules.split(",") if r.strip()]
         )
         value["enabled"] = bool(value.get("enabled", True))
+        for field in ("zap_enabled", "trivy_enabled"):
+            flag = value.get(field, False)
+            if flag is None and field == "zap_enabled":
+                value[field] = None  # Legacy projects inherit the global ZAP setting.
+                continue
+            if type(flag) is not bool:
+                raise ValueError(f"{field} must be a boolean")
+            value[field] = flag
+        scanners = value.get("trivy_scanners", ["vuln", "misconfig", "secret"])
+        if not isinstance(scanners, list) or any(
+            not isinstance(s, str) or s not in {"vuln", "misconfig", "secret", "license"}
+            for s in scanners
+        ):
+            raise ValueError("trivy_scanners must contain vuln, misconfig, secret, or license")
+        value["trivy_scanners"] = list(dict.fromkeys(scanners))
+        if value["trivy_enabled"] and not value["trivy_scanners"]:
+            raise ValueError("Enable at least one Trivy scanner")
         return value
 
     def create(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -86,6 +103,7 @@ class ProjectService:
             "expected_ports",
             "process_rules",
             "enabled",
+            "zap_enabled", "trivy_enabled", "trivy_scanners",
         }
         changes = {k: v for k, v in payload.items() if k in allowed}
         # A legacy client updating a singular field should still replace the list.
@@ -99,7 +117,7 @@ class ProjectService:
             )
         value = self.validate({**current, **changes})
         encoded = dict(value)
-        for key in ("expected_ports", "process_rules", "backend_urls", "health_urls"):
+        for key in ("expected_ports", "process_rules", "backend_urls", "health_urls", "trivy_scanners"):
             encoded[key] = json.dumps(encoded[key])
         assignments = ",".join(f"{key}=?" for key in encoded)
         self.db.execute(

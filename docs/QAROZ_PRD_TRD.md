@@ -1,5 +1,9 @@
 ## 0. 제품 명칭
 
+> 2026-09 확장: Regression Suite와 선택 Trivy 검사는
+> [Regression & Trivy 구현 명세](REGRESSION_AND_TRIVY.md)를 따른다.
+> 기존 Playwright/Recorder 구조와 Run All 구성을 유지하며 프로젝트별 보안 설정을 추가한다.
+
 - **Product name:** QAROZ
 - **Tagline:** Don't trust. Verify.
 - **Description:** Windows에서 여러 웹 애플리케이션의 시스템 상태, API, 브라우저 E2E, 보안 검사를 오케스트레이션하고 증거와 결과 이력을 통합 관리하는 local-first QA 플랫폼.
@@ -51,7 +55,8 @@ V1은 AI Agent 없이 결정적(deterministic)이고 재현 가능한 검사를
 | 목표     | 실패 시 screenshot, trace, console/network 정보 등 증거 보존 |
 | 목표     | OWASP ZAP 결과를 동일 Dashboard에 통합                       |
 | 목표     | QA 실행 결과와 과거 실행 이력 보존                           |
-| 비목표   | AI Agent, Trivy, GitHub Actions/CI 자동 실행                 |
+| 비목표   | AI Agent, GitHub Actions/CI 자동 실행                        |
+| 목표     | Regression Suite 및 선택 Trivy filesystem 검사             |
 | 비목표   | 클라우드 SaaS 형태의 다중 사용자 서비스                      |
 | 비목표   | 외부 서버로 테스트 데이터/로그/스크린샷 업로드               |
 
@@ -224,6 +229,11 @@ Active Scan은 대상에 실제 공격 요청을 보낼 수 있으므로 기본 
 대해서만 실행하며 실행 전 UI에 대상 URL을 명확히 표시한다.
 
 # 10. Dashboard UX
+
+2026-09 UI 흐름: **검사 준비 → 검사 실행 → 검사 결과 → Run History**.
+검사 준비는 System, API, E2E Scenarios, Regression, Security 탭으로 구성하며
+각 종류의 설정을 실행 전에 관리한다. 결과 요약/상세를 실행 영역 뒤에 보여주고,
+과거 실행 이력은 화면 아래에 둔다. API와 E2E 편집기도 각각의 설정 탭을 제공한다.
 
 ┌─────────────────────────────────────────────────────────┐  
 │ QAROZ \[ Run All \] │  
@@ -399,7 +409,7 @@ exit 1 \# FAIL/ERROR
 |----------|---------------------------------------------------------------------------|
 | V2       | Visual Regression, CLI, GitHub Actions/self-hosted runner, Firefox/WebKit |
 | V2       | OpenAPI import 기반 API testcase 생성, richer scenario editor             |
-| V2       | Trivy/SBOM/License 검사(현재 범위 제외)                                   |
+| V2       | SBOM 및 추가 보안 보고서 확장 (Trivy filesystem/License는 현재 지원)      |
 | V3       | AI Agent 탐색적 QA                                                        |
 | V3       | AI 시나리오 초안 생성                                                     |
 | V3       | 실패 로그/trace 기반 AI 원인 분석                                         |

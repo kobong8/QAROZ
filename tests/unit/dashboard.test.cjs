@@ -53,3 +53,31 @@ test('an unexecuted category in a completed run is not marked PASS', async () =>
   assert.equal(h.run("categoryStatus({status:'ERROR', results:[]}, 'e2e')"), 'NOT RUN');
   assert.equal(h.run("categoryStatus({status:'RUNNING', current_stage:'System', results:[]}, 'api')"), 'QUEUED');
 });
+
+test('regression groups are shown in order and excluded scenarios stay unchecked', async () => {
+  const h = await harness();
+  h.state.reply = async () => [
+    {id:'b', name:'Search', group:'Tasks', order:2, enabled:true, regression_enabled:false},
+    {id:'a', name:'Login', group:'Auth', order:1, enabled:true, regression_enabled:true},
+    {id:'c', name:'Disabled', group:'Auth', order:3, enabled:false, regression_enabled:true},
+  ];
+  h.run("active = {id:'A'}");
+  await h.run('loadRegression()');
+  const children = h.elements.get('#regressionList').children;
+  assert.equal(children[0].textContent, 'Auth');
+  assert.equal(children[1].children[0].children[1].textContent, 'Login');
+  assert.equal(children[1].children[0].children[0].checked, true);
+  assert.equal(children[2].children[0].children[0].disabled, true);
+  assert.equal(children[3].textContent, 'Tasks');
+  assert.equal(children[4].children[0].children[0].checked, false);
+});
+
+test('regression summary does not replace full E2E status', async () => {
+  const h = await harness();
+  const regression = {id:'r', suite:'regression', status:'FAIL', started_at:new Date().toISOString(), summary:{PASS:6, FAIL:1}};
+  h.state.reply = async () => [regression];
+  h.run("active = {id:'A'}");
+  await h.run('loadRuns()');
+  assert.match(h.elements.get('#regressionMetric').textContent, /6 PASS.*1 FAIL/);
+  assert.equal(h.elements.get('#e2eMetric').textContent, 'NOT RUN');
+});

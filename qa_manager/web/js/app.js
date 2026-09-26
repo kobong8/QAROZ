@@ -33,6 +33,12 @@ function categoryStatus(run, category) {
   if (['RUNNING', 'QUEUED'].includes(run.status)) return run.current_stage?.toLowerCase() === category ? 'RUNNING' : 'QUEUED';
   return 'NOT RUN';
 }
+function coversCategory(run, category) {
+  return run.suite === category || run.suite === 'all' || (category === 'security' && ['zap', 'trivy'].includes(run.suite));
+}
+function resultCounts(summary) {
+  return ['PASS', 'FAIL', 'WARNING', 'ERROR', 'SKIPPED'].map(status => `${summary[status] || 0} ${status}`).join(' · ');
+}
 async function loadProjects(preferred) {
   projects = await api('/projects');
   active = projects.find(project => project.id === (preferred || active?.id)) || projects[0] || null;
@@ -48,17 +54,42 @@ function renderTabs() {
 }
 async function render() {
   generation++; detailVersion++; clearTimeout(poll);
+  testsProjectId = active?.id || null;
   $('#empty').hidden = !!active; $('#dashboard').hidden = !active;
   $('#runAll').disabled = !active || !active.enabled; $('#runDetail').hidden = true;
   $('#overall').className = 'status neutral'; $('#overall b').textContent = 'NOT RUN';
   categories.forEach(category => { $('#' + category + 'Metric').textContent = 'NOT RUN'; });
   $('#runs').replaceChildren(); $('#testSummary').textContent = '';
+  $('#regressionMetric').textContent = 'NOT RUN';
+  $('#zapResult').textContent = 'NOT RUN'; $('#trivyResult').textContent = 'NOT RUN';
   if (!active) return;
   $('#projectName').textContent = active.name;
   $('#projectUrl').textContent = active.frontend_url; $('#projectUrl').href = active.frontend_url;
   $$('[data-run]').forEach(button => { button.disabled = !active.enabled; });
-  await Promise.all([loadRuns(), loadTestSummary()]);
+  $('#activeZap').disabled = !active.enabled;
+  $('#testsError').textContent = '';
+  $('#apiForm').reset(); $('#scenarioForm').reset();
+  $('#apiForm').elements.url.value = (active.backend_urls?.[0] || active.backend_url || active.frontend_url) + '/';
+  setPreparationTab('system', false);
+  await Promise.all([loadRuns(), refreshTests(), loadSecurity()]);
 }
+function setPreparationTab(name, focus = true) {
+  for (const tab of $$('[data-prep-tab]')) {
+    const selected = tab.dataset.prepTab === name;
+    tab.setAttribute('aria-selected', String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    $('#' + tab.getAttribute('aria-controls')).hidden = !selected;
+  }
+  if (focus) $('#prepTab' + name[0].toUpperCase() + name.slice(1)).focus();
+}
+$$('[data-prep-tab]').forEach(tab => {
+  tab.onclick = () => setPreparationTab(tab.dataset.prepTab, false);
+  tab.onkeydown = event => {
+    const tabs = [...$$('[data-prep-tab]')], index = tabs.indexOf(tab);
+    const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index - 1 + tabs.length) % tabs.length : -1;
+    if (next >= 0) { event.preventDefault(); setPreparationTab(tabs[next].dataset.prepTab); }
+  };
+});
 async function loadRuns() {
   clearTimeout(poll);
   if (!active) return;
@@ -66,7 +97,11 @@ async function loadRuns() {
   const current = () => active?.id === id && generation === currentGeneration && refreshVersion === version;
   try {
     const runs = await api(`/projects/${id}/runs`);
-    const relevant = categories.map(category => runs.find(run => run.suite === category || run.suite === 'all')).filter(Boolean);
+    const relevant = categories.map(category => runs.find(run => coversCategory(run, category))).filter(Boolean);
+    for (const scanner of ['zap', 'trivy']) {
+      const latest = runs.find(run => ['all', 'security', scanner].includes(run.suite));
+      if (latest) relevant.push(latest);
+    }
     const details = await Promise.all([...new Set(relevant.map(run => run.id))].map(runId => api(`/runs/${runId}`)));
     if (!current()) return;
     const box = $('#runs'); box.replaceChildren();
@@ -76,12 +111,24 @@ async function loadRuns() {
       button.onclick = () => showRun(run.id).catch(error => toast(error.message));
       const elapsed = run.duration_ms == null ? Math.max(0, Date.now() - new Date(run.started_at)) : run.duration_ms;
       row.append(badge(run.status), button, node('span', new Date(run.started_at).toLocaleString() + (run.current_stage ? ' · ' + run.current_stage : '')), node('span', (elapsed / 1000).toFixed(1) + 's'));
+      if (run.suite === 'regression') row.append(node('span', resultCounts(run.summary || {})));
       box.append(row);
     });
     $('#overall').className = 'status ' + (runs[0]?.status || 'neutral');
     $('#overall b').textContent = runs[0]?.status || 'NOT RUN';
+    const regression = runs.find(run => run.suite === 'regression');
+    $('#regressionMetric').textContent = regression ? `${regression.status} · ${resultCounts(regression.summary || {})}` : 'NOT RUN';
+    for (const scanner of ['zap', 'trivy']) {
+      const summary = runs.find(run => ['all', 'security', scanner].includes(run.suite));
+      const detail = details.find(run => run.id === summary?.id);
+      const finding = detail?.results?.find(result => result.details?.scanner === scanner);
+      $('#' + scanner + 'Result').textContent = finding ? `${finding.status} · ${finding.message || ''}` : 'NOT RUN';
+      if (scanner === 'trivy' && finding?.details?.summary) {
+        $('#trivyResult').textContent += '\n' + Object.entries(finding.details.summary).map(([severity, count]) => `${severity} ${count}`).join(' · ');
+      }
+    }
     categories.forEach(category => {
-      const summary = runs.find(run => run.suite === category || run.suite === 'all');
+      const summary = runs.find(run => coversCategory(run, category));
       const detail = details.find(run => run.id === summary?.id);
       $('#' + category + 'Metric').textContent = detail ? categoryStatus(detail, category) : 'NOT RUN';
     });
@@ -93,8 +140,13 @@ async function showRun(id) {
   if (projectId !== active?.id || version !== detailVersion) return;
   const box = $('#runDetail'); box.hidden = false; box.replaceChildren();
   box.append(node('h2', run.suite.toUpperCase() + ' · ' + run.status), node('p', new Date(run.started_at).toLocaleString()));
+  if (run.suite === 'regression') {
+    const summary = {}; run.results.forEach(result => { summary[result.status] = (summary[result.status] || 0) + 1; });
+    box.append(node('p', resultCounts(summary)));
+  }
   if (run.results.some(result => ['api', 'e2e'].includes(result.category) && ['FAIL', 'ERROR'].includes(result.status) && result.source_id)) {
-    const retry = node('button', '↻ 실패한 API/E2E 항목만 다시 실행', 'primary');
+    const retry = node('button', run.suite === 'regression' ? '↻ Retry Failed' : '↻ 실패한 API/E2E 항목만 다시 실행', 'primary');
+    retry.disabled = ['RUNNING', 'QUEUED'].includes(run.status);
     retry.onclick = async () => {
       retry.disabled = true;
       try { await api(`/runs/${run.id}/retry-failed`, {method: 'POST', body: '{}'}); toast('실패 항목 재실행을 예약했습니다.'); await loadRuns(); }
@@ -105,6 +157,18 @@ async function showRun(id) {
   for (const result of run.results) {
     const item = node('article', null, 'result');
     item.append(badge(result.status), node('h3', result.category.toUpperCase() + ' · ' + result.test_name), node('p', result.message));
+    item.append(node('p', `${result.duration_ms}ms`));
+    if (result.category === 'e2e' && result.source_id && ['FAIL', 'ERROR'].includes(result.status)) {
+      const retry = node('button', 'Retry Scenario');
+      retry.disabled = ['RUNNING', 'QUEUED'].includes(run.status);
+      retry.onclick = async () => {
+        retry.disabled = true;
+        try { await api(`/runs/${run.id}/retry-failed`, {method: 'POST', body: JSON.stringify({scenario_id: result.source_id})}); await loadRuns(); toast('시나리오 재실행을 예약했습니다.'); }
+        catch (error) { toast(error.message); retry.disabled = false; }
+      };
+      item.append(retry);
+    }
+    if (result.details?.scanner === 'trivy' && result.details.summary) renderTrivyResult(item, result.details);
     if (Object.keys(result.details || {}).length) {
       const details = node('details'); details.append(node('summary', '검사 데이터 / 로그'), node('pre', JSON.stringify(result.details, null, 2))); item.append(details);
     }
@@ -188,23 +252,26 @@ $('#setup').onclick = async () => {
   try {
     const settings = await api('/settings'); $('#zapUrl').value = settings.zap_api_url;
     $('#securityEnabled').checked = settings.security_enabled === 'true';
+    $('#trivyExecutable').value = settings.trivy_executable || '';
   } catch (error) { $('#setupError').textContent = error.message; }
   await checkReadiness();
 };
 $('#checkReadiness').onclick = checkReadiness;
 $('#saveSettings').onclick = async () => {
   try {
-    await api('/settings', {method: 'PUT', body: JSON.stringify({zap_api_url: $('#zapUrl').value, security_enabled: $('#securityEnabled').checked})});
+    await api('/settings', {method: 'PUT', body: JSON.stringify({zap_api_url: $('#zapUrl').value, security_enabled: $('#securityEnabled').checked, trivy_executable: $('#trivyExecutable').value.trim()})});
     $('#setupError').textContent = ''; toast('설정 저장 완료');
   } catch (error) { $('#setupError').textContent = error.message; }
 };
 async function refreshTests() {
   const id = testsProjectId;
+  if (!id) return;
   const [cases, scenarios] = await Promise.all([api(`/projects/${id}/api-tests`), api(`/projects/${id}/scenarios`)]);
   if (id !== testsProjectId) return;
-  const list = $('#testList'); list.replaceChildren();
   for (const [label, items, endpoint] of [['API', cases, 'api-tests'], ['E2E', scenarios, 'scenarios']]) {
-    list.append(node('h3', label + ' · ' + items.length));
+    const list = $(label === 'API' ? '#apiTestList' : '#scenarioTestList'); list.replaceChildren();
+    const heading = node('h3', `등록된 ${label} · ${items.length}`);
+    list.append(heading);
     items.forEach(item => {
       const row = node('div', null, 'test-item'), remove = node('button', '삭제');
       remove.onclick = async () => {
@@ -216,13 +283,8 @@ async function refreshTests() {
       row.append(description, remove); list.append(row);
     });
   }
+  if (active?.id === id) await Promise.all([loadPreparation(), loadRegression(), loadTestSummary()]);
 }
-$('#manageTests').onclick = async () => {
-  if (!active) return;
-  testsProjectId = active.id; $('#testsProject').textContent = active.name; $('#testsError').textContent = '';
-  $('#apiForm').elements.url.value = (active.backend_urls?.[0] || active.backend_url || active.frontend_url) + '/'; $('#testsDialog').showModal();
-  try { await refreshTests(); } catch (error) { $('#testsError').textContent = error.message; }
-};
 $('#exportRecipe').onclick = async () => {
   if (!testsProjectId) return;
   try {
@@ -271,12 +333,130 @@ $('#starter').onclick = async () => {
     const [cases, scenarios] = await Promise.all([api(`/projects/${project.id}/api-tests`), api(`/projects/${project.id}/scenarios`)]);
     if (!cases.some(item => item.name === 'Frontend HTTP smoke')) await api(`/projects/${project.id}/api-tests`, {method: 'POST', body: JSON.stringify({name: 'Frontend HTTP smoke', url: project.frontend_url + '/', expected_status: 200})});
     if (!scenarios.some(item => item.name === 'Frontend page smoke')) await api(`/projects/${project.id}/scenarios`, {method: 'POST', body: JSON.stringify({name: 'Frontend page smoke', steps: [{action: 'goto', url: '/'}, {action: 'wait', selector: 'body'}], expected: [{type: 'visible', selector: 'body'}]})});
-    await loadTestSummary(); toast('기본 연결 테스트 준비 완료. 업무 기능 검사는 별도 등록하세요.');
+    if (active?.id === project.id) await refreshTests(); toast('기본 연결 테스트 준비 완료. 업무 기능 검사는 별도 등록하세요.');
   } catch (error) { toast(error.message); }
   finally { $('#starter').disabled = false; }
 };
 setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString(); }, 1000);
 loadProjects().catch(error => toast(error.message));
+
+async function loadRegression() {
+  if (!active) return;
+  const id = active.id, currentGeneration = generation;
+  const scenarios = await api(`/projects/${id}/scenarios`);
+  if (active?.id !== id || generation !== currentGeneration) return;
+  const list = $('#regressionList'); list.replaceChildren();
+  const groups = new Map();
+  scenarios.sort((a, b) => a.order - b.order).forEach(scenario => {
+    const group = scenario.group || 'Ungrouped';
+    if (!groups.has(group)) groups.set(group, []);
+    groups.get(group).push(scenario);
+  });
+  if (!scenarios.length) list.append(node('p', '저장된 시나리오가 없습니다. Record Scenario로 추가하세요.', 'muted'));
+  for (const [group, items] of groups) {
+    list.append(node('h3', group));
+    for (const scenario of items) {
+      const row = node('div', null, 'regression-row');
+      const label = node('label', null, 'check'), check = node('input');
+      check.type = 'checkbox'; check.checked = scenario.regression_enabled; check.disabled = !scenario.enabled;
+      label.append(check, node('span', scenario.name + (scenario.enabled ? '' : ' (비활성)')));
+      const groupLabel = node('label', 'Group'), groupInput = node('input'); groupInput.value = scenario.group || ''; groupInput.maxLength = 200; groupLabel.append(groupInput);
+      const orderLabel = node('label', 'Order'), orderInput = node('input'); orderInput.type = 'number'; orderInput.value = scenario.order; orderInput.step = '1'; orderLabel.append(orderInput);
+      const save = node('button', '저장');
+      const update = async payload => {
+        try { await api(`/scenarios/${scenario.id}`, {method: 'PATCH', body: JSON.stringify(payload)}); if (active?.id === id) await loadRegression(); }
+        catch (error) { toast(error.message); check.checked = scenario.regression_enabled; }
+      };
+      check.onchange = () => update({regression_enabled: check.checked});
+      save.onclick = () => update({group: groupInput.value.trim() || null, order: Number(orderInput.value)});
+      row.append(label, groupLabel, orderLabel, save); list.append(row);
+    }
+  }
+}
+async function loadPreparation() {
+  if (!active) return;
+  const project = active, id = project.id;
+  const [cases, scenarios] = await Promise.all([
+    api(`/projects/${id}/api-tests`), api(`/projects/${id}/scenarios`),
+  ]);
+  if (active?.id !== id) return;
+  const system = $('#systemPreparation'); system.replaceChildren();
+  system.append(node('p', `Frontend · ${project.frontend_url}`));
+  system.append(node('p', `Backend · ${(project.backend_urls || []).join(', ') || '미등록'}`));
+  system.append(node('p', `Health · ${(project.health_urls || []).join(', ') || 'Backend 기본 URL 검사'}`));
+  system.append(node('p', `Ports · ${(project.expected_ports || []).join(', ') || '미등록'}　 Process · ${(project.process_rules || []).join(', ') || '미등록'}`));
+  const apiList = $('#apiPreparationList'); apiList.replaceChildren();
+  const enabledCases = cases.filter(item => item.enabled);
+  apiList.append(node('p', `활성 ${enabledCases.length} / 전체 ${cases.length}`));
+  if (enabledCases.length) apiList.append(node('p', enabledCases.map(item => `${item.method} ${item.name} · HTTP ${item.expected_status}`).join('　·　')));
+  else apiList.append(node('p', 'API 테스트가 없습니다. 실제 서비스의 URL과 기대 응답을 등록하세요.', 'muted'));
+  const e2eList = $('#e2ePreparationList'); e2eList.replaceChildren();
+  const enabledScenarios = scenarios.filter(item => item.enabled);
+  e2eList.append(node('p', `활성 ${enabledScenarios.length} / 전체 ${scenarios.length}`));
+  if (enabledScenarios.length) e2eList.append(node('p', enabledScenarios.map(item => item.name).join('　·　')));
+  else e2eList.append(node('p', 'E2E 시나리오가 없습니다. 직접 검증한 흐름을 녹화해 저장하세요.', 'muted'));
+}
+async function loadSecurity() {
+  if (!active) return;
+  const project = active;
+  $('#projectZap').checked = !!project.zap_enabled;
+  $('#projectTrivy').checked = !!project.trivy_enabled;
+  $('#zapTarget').textContent = 'Target: ' + project.frontend_url;
+  $('#trivyTarget').textContent = 'Target: ' + (project.project_path || '프로젝트 수정에서 Project path를 등록하세요.');
+  $('#trivyStatus').textContent = '설치 상태 확인 버튼을 눌러 확인하세요.';
+  $$('#trivyScanners input').forEach(input => { input.checked = (project.trivy_scanners || ['vuln', 'misconfig', 'secret']).includes(input.value); });
+  if (project.zap_enabled == null) {
+    const settings = await api('/settings');
+    if (active?.id === project.id) $('#projectZap').checked = settings.security_enabled === 'true';
+  }
+}
+$('#saveProjectSecurity').onclick = async () => {
+  if (!active) return;
+  const id = active.id;
+  try {
+    const project = await api(`/projects/${id}`, {method: 'PUT', body: JSON.stringify({
+      zap_enabled: $('#projectZap').checked, trivy_enabled: $('#projectTrivy').checked,
+      trivy_scanners: [...$$('#trivyScanners input')].filter(input => input.checked).map(input => input.value),
+    })});
+    projects = projects.map(item => item.id === id ? project : item);
+    if (active?.id === id) active = project;
+    toast('프로젝트 Security 설정을 저장했습니다.');
+  } catch (error) { toast(error.message); }
+};
+$('#checkTrivy').onclick = async () => {
+  const id = active?.id;
+  $('#trivyStatus').textContent = '확인 중…';
+  try {
+    const status = await api('/system/trivy/status');
+    if (active?.id === id) $('#trivyStatus').textContent = status.installed ? `Installed · Version: ${status.version}` : `Not Installed · ${status.message}`;
+  } catch (error) { if (active?.id === id) $('#trivyStatus').textContent = error.message; }
+};
+$('#activeZap').onclick = async () => {
+  if (!active || !active.enabled) return;
+  const project = active;
+  if (!confirm(`ZAP Active Scan은 공격 요청을 보냅니다. 대상: ${project.frontend_url}\n이 대상에 Active Scan을 실행할까요?`)) return;
+  try { await api(`/projects/${project.id}/run/zap`, {method: 'POST', body: JSON.stringify({active: true})}); if (active?.id === project.id) await loadRuns(); }
+  catch (error) { toast(error.message); }
+};
+$('#recordRegression').onclick = async () => {
+  if (!active) return;
+  testsProjectId = active.id;
+  await $('#startRecorder').onclick();
+};
+function renderTrivyResult(container, report) {
+  container.append(node('h3', Object.entries(report.summary).map(([severity, count]) => `${severity} ${count}`).join(' · ')));
+  for (const category of ['Vulnerabilities', 'Misconfigurations', 'Secrets', 'Licenses']) {
+    const findings = report.findings.filter(item => item.category === category);
+    const section = node('details'); section.append(node('summary', `${category} · ${findings.length}`));
+    if (category === 'Licenses') section.append(node('p', 'Trivy의 라이선스 이름과 분류이며 법적 판단이 아닙니다.'));
+    for (const finding of findings) {
+      const item = node('article', null, 'result');
+      for (const [key, value] of Object.entries(finding)) if (key !== 'category') item.append(node('p', `${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`));
+      section.append(item);
+    }
+    container.append(section);
+  }
+}
 
 // Scenario Recorder is an adapter: its draft is converted to the unchanged
 // {steps, expected} Scenario payload only when the user saves it.
