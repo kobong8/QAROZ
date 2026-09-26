@@ -2,12 +2,12 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>QAROZ · Don't trust. Verify.</title>
+  <title>QAROZ</title>
   <link rel="stylesheet" href="/css/style.css">
   <link rel="stylesheet" href="/css/setup.css">
 </head>
 <body>
-  <header><div class="brand"><span class="mark">Q</span><div><strong>QAROZ</strong><small>Don't trust. Verify.</small></div></div><div class="header-actions"><span id="clock"></span><button id="setup">설치 / 설정</button><button id="runAll" class="primary">▶ RUN ALL</button></div></header>
+  <header><div class="brand"><span class="mark">Q</span><div><strong>QAROZ</strong></div></div><div class="header-actions"><span id="clock"></span><button id="setup">설치 / 설정</button><button id="runAll" class="primary">▶ RUN ALL</button></div></header>
   <nav id="tabs" aria-label="Projects"><button id="addTab" class="add">＋ ADD PROJECT</button></nav>
   <main>
     <section id="empty" class="empty"><div class="radar">◎</div><h1>Ready to verify.</h1><p>Register a local web service to begin deterministic quality checks.</p><button class="primary" data-add>＋ Add your first project</button></section>
@@ -16,7 +16,7 @@
       <div class="actions"><button data-run="system">◉ SYSTEM CHECK</button><button data-run="api">↯ API TESTS</button><button data-run="e2e">◇ E2E SCENARIOS</button><button data-run="security">⬡ SECURITY SCAN</button><button id="editProject">⚙ 프로젝트 수정 / 삭제</button></div>
       <div class="metrics"><article><span>SYSTEM</span><b id="systemMetric">—</b><small>Process · Port · Health</small></article><article><span>API</span><b id="apiMetric">—</b><small>Assertions & timing</small></article><article><span>PLAYWRIGHT</span><b id="e2eMetric">—</b><small>Browser scenarios</small></article><article><span>SECURITY</span><b id="securityMetric">—</b><small>ZAP alerts</small></article></div>
       <div class="panel padded"><h2>검사 준비</h2><p>URL만 등록하면 시스템 연결만 확인합니다. API 테스트와 브라우저 시나리오를 등록하세요. ZAP은 선택 사항입니다.</p><p id="testSummary"></p><div class="actions"><button id="starter">기본 연결 테스트 추가</button><button id="manageTests">테스트 / 시나리오 관리</button></div><p>기본 테스트는 프런트엔드 HTTP 200과 페이지 본문 표시만 확인합니다. 로그인·저장 등의 업무 기능은 별도 시나리오가 필요합니다.</p></div>
-      <div class="panel"><div class="panel-title"><div><p class="eyebrow">EVIDENCE LOG</p><h2>Run history</h2></div><button id="refresh">↻ Refresh</button></div><div id="runs" class="runs"><p class="muted">No runs recorded yet.</p></div></div>
+      <div class="panel"><div class="panel-title"><div><p class="eyebrow">EVIDENCE LOG</p><h2>Run history</h2></div><div class="actions"><button id="clearHistory" class="danger">Clear history</button><button id="refresh">↻ Refresh</button></div></div><div id="runs" class="runs"><p class="muted">No runs recorded yet.</p></div></div>
       <div id="runDetail" class="panel padded" hidden></div>
     </section>
   </main>

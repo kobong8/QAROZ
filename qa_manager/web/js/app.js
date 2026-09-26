@@ -153,6 +153,22 @@ $$('[data-close]').forEach(button => { button.onclick = () => $('#projectDialog'
 $$('[data-dismiss]').forEach(button => { button.onclick = () => button.closest('dialog').close(); });
 $$('[data-add]').forEach(button => { button.onclick = () => openForm(); });
 $('#addTab').onclick = () => openForm(); $('#editProject').onclick = () => openForm(true); $('#refresh').onclick = loadRuns;
+$('#clearHistory').onclick = async () => {
+  if (!active) return;
+  const project = active, button = $('#clearHistory');
+  if (!confirm(`${project.name}의 완료된 실행 이력과 결과를 모두 삭제할까요? 실행·대기 중인 작업과 등록된 테스트는 유지됩니다. 증거 파일은 디스크에 남습니다.`)) return;
+  button.disabled = true;
+  try {
+    const result = await api(`/projects/${project.id}/runs`, {method: 'DELETE'});
+    if (active?.id === project.id) {
+      refreshVersion++; detailVersion++; clearTimeout(poll);
+      $('#runDetail').hidden = true; $('#runDetail').replaceChildren();
+      await loadRuns();
+    }
+    toast(`${project.name}: 실행 이력 ${result.deleted}개를 삭제했습니다.`);
+  } catch (error) { toast(error.message); }
+  finally { button.disabled = false; }
+};
 async function run(suite) {
   if (!active) return;
   try { await api(`/projects/${active.id}/run/${suite}`, {method: 'POST', body: '{}'}); toast(`${suite.toUpperCase()} queued`); await loadRuns(); }

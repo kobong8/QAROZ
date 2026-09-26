@@ -229,5 +229,9 @@ The smoke test uses a temporary database and does not require a browser or ZAP.
 
 ## Data removal
 
+Run history의 **Clear history**는 선택한 프로젝트의 완료된 실행 이력과 결과를 삭제합니다.
+실행·대기 중인 작업, 프로젝트 설정, 등록된 테스트는 유지됩니다.
+증거 파일은 디스크에 남지만 삭제된 이력에서는 다운로드할 수 없습니다.
+
 Stop QAROZ and delete `data\qaroz.db` and `artifacts\` to remove all local history.
 No cloud upload, analytics, or update service is part of V1.

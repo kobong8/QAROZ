@@ -4,6 +4,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from qa_manager.core.models import Status
 from qa_manager.runners.api_runner import ApiRunner
+from qa_manager.runners.api_runner import json_equal
+
+
+def test_json_assertions_compare_nested_types():
+    assert not json_equal(True, 1)
+    assert not json_equal({"items": [False]}, {"items": [0]})
+    assert not json_equal(1, 1.0)
+    assert json_equal({"items": [True, 1, None]}, {"items": [True, 1, None]})
 
 
 class Handler(BaseHTTPRequestHandler):

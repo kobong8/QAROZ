@@ -95,8 +95,9 @@ class RunService:
                     run_id,
                 ),
             )
-            with self._lock:
-                self._active.discard(project["id"])
+            if suite == "all":
+                with self._lock:
+                    self._active.discard(project["id"])
 
     def _run_category(
         self,
@@ -192,6 +193,17 @@ class RunService:
             "SELECT * FROM test_runs WHERE project_id=? ORDER BY started_at DESC",
             (project_id,),
         )
+
+    def clear_history(self, project_id: str) -> int:
+        # One statement also cascades to results, alerts, and artifact records.
+        # Workers may still be writing queued/running runs, so preserve them.
+        with self.db.connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM test_runs WHERE project_id=? "
+                "AND status IN ('PASS', 'FAIL', 'WARNING', 'SKIPPED', 'ERROR')",
+                (project_id,),
+            )
+            return cursor.rowcount
 
     def results(self, run_id: str) -> list[dict[str, Any]]:
         rows = self.db.fetchall(

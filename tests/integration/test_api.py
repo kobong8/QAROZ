@@ -6,6 +6,51 @@ from qa_manager.core.config import Settings
 from qa_manager.main import create_app
 
 
+def test_clear_history_preserves_active_runs_and_other_projects(tmp_path: Path):
+    settings = Settings(tmp_path, tmp_path / "d", tmp_path / "a", tmp_path / "d" / "db.sqlite")
+    with TestClient(create_app(settings)) as client:
+        projects = [client.post("/api/projects", json={
+            "name": name, "frontend_url": "http://localhost:5173",
+        }).json() for name in ("A", "B")]
+        project_id = projects[0]["id"]
+        case = client.post(f"/api/projects/{project_id}/api-tests", json={
+            "name": "Health", "url": "http://localhost:8000/health",
+        }).json()
+        db = client.app.state.db
+        run_ids = {}
+        for status in ("PASS", "FAIL", "WARNING", "SKIPPED", "ERROR", "RUNNING", "QUEUED"):
+            run_ids[status] = db.insert("test_runs", {
+                "project_id": project_id, "suite": "api", "trigger": "manual",
+                "started_at": "2026-01-01T00:00:00+00:00", "status": status,
+            })
+        other = db.insert("test_runs", {
+            "project_id": projects[1]["id"], "suite": "api", "trigger": "manual",
+            "started_at": "2026-01-01T00:00:00+00:00", "status": "PASS",
+        })
+        result_id = db.insert("test_results", {
+            "run_id": run_ids["FAIL"], "category": "api", "test_name": "Health",
+            "status": "FAIL", "duration_ms": 1,
+        })
+        evidence = tmp_path / "a" / "evidence.txt"
+        evidence.write_text("evidence", encoding="utf-8")
+        db.insert("artifacts", {"result_id": result_id, "type": "log", "local_path": str(evidence)})
+        db.insert("zap_alerts", {"run_id": run_ids["FAIL"], "name": "Alert"})
+
+        endpoint = f"/api/projects/{project_id}/runs"
+        assert client.delete(endpoint).json() == {"deleted": 5}
+        assert {run["status"] for run in client.get(endpoint).json()} == {"RUNNING", "QUEUED"}
+        assert client.get(f"/api/runs/{other}").status_code == 200
+        assert client.get(f"/api/runs/{run_ids['FAIL']}").status_code == 404
+        assert client.get(f"/api/projects/{project_id}/api-tests").json()[0]["id"] == case["id"]
+        assert not db.fetchall("SELECT * FROM test_results")
+        assert not db.fetchall("SELECT * FROM artifacts")
+        assert not db.fetchall("SELECT * FROM zap_alerts")
+        assert evidence.is_file()
+        assert client.delete(endpoint).json() == {"deleted": 0}
+        assert client.delete("/api/projects/missing/runs").status_code == 404
+        assert "Don't trust. Verify." not in client.get("/").text
+
+
 def test_project_crud_run_and_dashboard(tmp_path: Path):
     settings = Settings(
         tmp_path,
@@ -108,7 +153,7 @@ def test_backend_urls_must_be_an_array(tmp_path: Path):
 def test_recipe_round_trip_and_rejects_unknown_version(tmp_path: Path):
     settings = Settings(tmp_path, tmp_path / "d", tmp_path / "a", tmp_path / "d" / "db.sqlite")
     with TestClient(create_app(settings)) as client:
-        first = client.post("/api/projects", json={"name": "Source", "frontend_url": "http://localhost:5173"}).json()
+        first = client.post("/api/projects", json={"name": "한글 프로젝트", "frontend_url": "http://localhost:5173"}).json()
         second = client.post("/api/projects", json={"name": "Target", "frontend_url": "http://localhost:5174"}).json()
         client.post(f"/api/projects/{first['id']}/api-tests", json={"name": "Health", "url": "http://localhost:8000/health"})
         client.post(f"/api/projects/{first['id']}/scenarios", json={"name": "Home", "steps": [{"action": "goto", "url": "/"}], "expected": [{"type": "visible", "selector": "body"}]})
@@ -116,6 +161,7 @@ def test_recipe_round_trip_and_rejects_unknown_version(tmp_path: Path):
         exported = client.get(f"/api/projects/{first['id']}/recipe")
         assert exported.status_code == 200
         assert "attachment" in exported.headers["content-disposition"]
+        assert "filename*=UTF-8''" in exported.headers["content-disposition"]
         assert exported.json()["format"] == "qaroz-recipe"
         imported = client.post(f"/api/projects/{second['id']}/recipe", json=exported.json())
         assert imported.json() == {"api_tests": 1, "scenarios": 1}
@@ -137,3 +183,8 @@ def test_retry_failed_selects_only_failed_api_and_e2e_items(tmp_path: Path):
         assert retried.status_code == 202
         assert retried.json()["trigger"] == f"retry:{run_id}"
         assert client.post(f"/api/runs/{retried.json()['id']}/retry-failed").status_code in {409, 202}
+
+        db.execute("UPDATE api_test_cases SET enabled=0 WHERE id=?", (case["id"],))
+        assert client.post(f"/api/runs/{run_id}/retry-failed").status_code == 409
+        db.execute("DELETE FROM api_test_cases WHERE id=?", (case["id"],))
+        assert client.post(f"/api/runs/{run_id}/retry-failed").status_code == 409

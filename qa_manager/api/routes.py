@@ -6,6 +6,7 @@ import sys
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -207,7 +208,10 @@ def export_recipe(request: Request, project_id: str):
     safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in project_value["name"])
     return JSONResponse(
         recipe,
-        headers={"Content-Disposition": f'attachment; filename="{safe_name or "project"}.qaroz.json"'},
+        headers={"Content-Disposition": (
+            'attachment; filename="project.qaroz.json"; '
+            f"filename*=UTF-8''{quote((safe_name or 'project') + '.qaroz.json')}"
+        )},
     )
 
 
@@ -341,6 +345,13 @@ def runs(request: Request, project_id: str):
     return state(request).runs.list(project_id)
 
 
+@router.delete("/projects/{project_id}/runs")
+def clear_run_history(request: Request, project_id: str):
+    if not state(request).projects.get(project_id):
+        raise HTTPException(404, "Project not found")
+    return {"deleted": state(request).runs.clear_history(project_id)}
+
+
 @router.get("/runs/{run_id}")
 def run_detail(request: Request, run_id: str):
     value = state(request).runs.get(run_id)
@@ -364,10 +375,22 @@ def retry_failed(request: Request, run_id: str):
     if not previous:
         raise HTTPException(404, "Run not found")
     project_value = state(request).projects.get(previous["project_id"])
+    if not project_value or not project_value["enabled"]:
+        raise HTTPException(409, "Project is unavailable or disabled")
+    enabled_ids = {
+        "api": {item["id"] for item in state(request).db.fetchall(
+            "SELECT id FROM api_test_cases WHERE project_id=? AND enabled=1",
+            (project_value["id"],),
+        )},
+        "e2e": {item["id"] for item in state(request).db.fetchall(
+            "SELECT id FROM scenarios WHERE project_id=? AND enabled=1",
+            (project_value["id"],),
+        )},
+    }
     failed = [
         item for item in state(request).runs.results(run_id)
         if item["status"] in {"FAIL", "ERROR"} and item["category"] in {"api", "e2e"}
-        and item.get("source_id")
+        and item.get("source_id") in enabled_ids[item["category"]]
     ]
     if not failed:
         raise HTTPException(409, "No retryable failed API or E2E items")
@@ -379,7 +402,10 @@ def retry_failed(request: Request, run_id: str):
         "retry_of": run_id,
         "retry_categories": sorted(categories),
     }
-    return state(request).runs.submit(project_value, suite, options, trigger=f"retry:{run_id}")
+    try:
+        return state(request).runs.submit(project_value, suite, options, trigger=f"retry:{run_id}")
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.get("/artifacts/{artifact_id}")

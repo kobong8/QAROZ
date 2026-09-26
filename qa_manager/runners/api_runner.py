@@ -19,6 +19,21 @@ def lookup(data: Any, dotted_path: str) -> Any:
     return current
 
 
+def json_equal(actual: Any, expected: Any) -> bool:
+    """Compare JSON values without Python's bool/number coercion."""
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(actual, dict):
+        return actual.keys() == expected.keys() and all(
+            json_equal(actual[key], expected[key]) for key in actual
+        )
+    if isinstance(actual, list):
+        return len(actual) == len(expected) and all(
+            json_equal(a, b) for a, b in zip(actual, expected)
+        )
+    return actual == expected
+
+
 class ApiRunner:
     def run(self, case: dict[str, Any]) -> RunnerResult:
         started = time.perf_counter()
@@ -75,7 +90,7 @@ class ApiRunner:
                     for field, expected in case["assertions"].items():
                         try:
                             actual = lookup(parsed, field)
-                            if actual != expected:
+                            if not json_equal(actual, expected):
                                 failures.append(
                                     f"{field}: expected {expected!r}, received {actual!r}"
                                 )
